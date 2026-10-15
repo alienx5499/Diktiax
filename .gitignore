@@ -1,0 +1,15 @@
+target/
+node_modules/
+.next/
+dist/
+*.log
+.DS_Store
+.specs/scratchpad/
+.specs/
+commit.txt
+skills-lock.json
+
+# Local secrets: never commit
+.env
+.env.*
+!.env.example
