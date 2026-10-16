@@ -1,0 +1,59 @@
+# Whole stack: FalkorDB + backend + frontend.
+#   docker compose -f docker-compose.full.yml up -d --build
+# Host ports are overridable (FALKORDB_HOST_PORT, BACKEND_HOST_PORT, FRONTEND_HOST_PORT).
+# NEXT_PUBLIC_API_BASE is baked into the frontend at build time: it must be the backend URL
+# as seen from the browser. Changing BACKEND_HOST_PORT therefore needs a rebuild.
+
+services:
+  falkordb:
+    image: falkordb/falkordb:latest
+    ports:
+      # Loopback only: the backend reaches FalkorDB over the compose network; this is for local debugging.
+      - "127.0.0.1:${FALKORDB_HOST_PORT:-6379}:6379"
+    volumes:
+      - falkordb-data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    ports:
+      # Loopback by default: the API has no auth (see README "Deploy" before exposing it).
+      - "127.0.0.1:${BACKEND_HOST_PORT:-3001}:3001"
+    environment:
+      FALKORDB_URL: falkor://falkordb:6379
+      FALKORDB_GRAPH: ${FALKORDB_GRAPH:-claimgraph}
+      HOST: 0.0.0.0
+      PORT: "3001"
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-}
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      GROQ_MODEL: ${GROQ_MODEL:-}
+      LLM_BASE_URL: ${LLM_BASE_URL:-}
+      WEBHOOK_URL: ${WEBHOOK_URL:-}
+      # Set to lock POST /api/seed (graph wipe) behind an x-admin-token header.
+      ADMIN_TOKEN: ${ADMIN_TOKEN:-}
+    depends_on:
+      falkordb:
+        condition: service_healthy
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        NEXT_PUBLIC_API_BASE: ${NEXT_PUBLIC_API_BASE:-http://localhost:${BACKEND_HOST_PORT:-3001}}
+    ports:
+      - "127.0.0.1:${FRONTEND_HOST_PORT:-3000}:3000"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  falkordb-data:
