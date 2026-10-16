@@ -1,7 +1,7 @@
 //! Pure JSON-RPC 2.0 / MCP message routing. Classifies one inbound line and builds every
 //! response that does not need the graph; tool execution is left to the caller (`stdio.rs`).
 
-use super::catalog::{investigate_claim_definition, tool_definitions, ToolDefinition};
+use crate::tools::{investigate_claim_definition, tool_definitions, ToolDefinition};
 use serde_json::{json, Map, Value};
 
 pub const LATEST_PROTOCOL_VERSION: &str = "2025-06-18";

@@ -1,5 +1,5 @@
 //! Planner contract: a planner only DECIDES which graph tools to call next. The investigator
-//! executes every call through `crate::mcp::execute_tool` and feeds outcomes back.
+//! executes every call through `crate::tools::execute_tool` and feeds outcomes back.
 
 use serde_json::Value;
 use std::future::Future;
@@ -7,7 +7,7 @@ use std::future::Future;
 /// Hard bound on executed tool calls per investigation, for every planner.
 pub const MAX_STEPS: usize = 12;
 
-use crate::mcp::{
+use crate::tools::{
     DETECT_GHOST_COLLISION, DETECT_KICKBACK_TRIANGLE, DETECT_SHARED_CONTACTS, DETECT_VIN_CLONING,
 };
 

@@ -98,7 +98,7 @@ impl ClaudePlanner {
     }
 
     fn request_body(&self) -> Value {
-        let tools: Vec<Value> = crate::mcp::tool_definitions()
+        let tools: Vec<Value> = crate::tools::tool_definitions()
             .into_iter()
             .map(|t| json!({ "name": t.name, "description": t.description, "input_schema": t.input_schema }))
             .collect();

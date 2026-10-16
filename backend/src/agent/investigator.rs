@@ -188,7 +188,7 @@ impl ClaimInvestigator {
 
     async fn execute(&self, call: PlannedCall) -> ToolOutcome {
         let started = Instant::now();
-        let result = crate::mcp::execute_tool(&self.repo, &call.tool, &call.arguments).await;
+        let result = crate::tools::execute_tool(&self.repo, &call.tool, &call.arguments).await;
         let latency_ms = elapsed_ms(started);
         if let Err(e) = &result {
             info!("tool {} failed: {e}", call.tool);

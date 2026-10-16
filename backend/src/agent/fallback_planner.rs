@@ -82,7 +82,7 @@ impl<P: Planner + Send> Planner for FallbackPlanner<P> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::mcp::EXPLORE_CLAIM_SUBGRAPH;
+    use crate::tools::EXPLORE_CLAIM_SUBGRAPH;
 
     /// Primary that errors on the first call, like an Anthropic HTTP failure.
     struct Failing(usize);

@@ -1,11 +1,11 @@
 //! MCP stdio transport: newline-delimited JSON-RPC 2.0 on stdin/stdout.
 //! stdout carries protocol lines only; diagnostics go through `tracing` (stderr).
 
-use super::catalog::INVESTIGATE_CLAIM;
 use super::protocol::{route_line, tool_result, Route};
-use super::tools::{execute_tool, required_str};
 use crate::agent::ClaimInvestigator;
 use crate::db::FalkorGraphRepository;
+use crate::tools::INVESTIGATE_CLAIM;
+use crate::tools::{execute_tool, required_str};
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tracing::{info, warn};

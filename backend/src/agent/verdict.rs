@@ -5,7 +5,7 @@ use super::planner::{ToolOutcome, DETECTORS};
 use crate::actions::INCONCLUSIVE_TIER;
 use crate::domain::evaluator::FraudRiskAssessment;
 use crate::domain::SubgraphPayload;
-use crate::mcp::EXPLORE_CLAIM_SUBGRAPH;
+use crate::tools::EXPLORE_CLAIM_SUBGRAPH;
 
 /// Exploration / detector tools whose failure on the target claim leaves a gap in the evidence.
 fn is_required(tool: &str) -> bool {
@@ -82,7 +82,7 @@ mod tests {
     use super::*;
     use crate::agent::planner::PlannedCall;
     use crate::domain::FraudRiskEvaluator;
-    use crate::mcp::{DETECT_KICKBACK_TRIANGLE, DETECT_VIN_CLONING, SHOP_CENTRALITY};
+    use crate::tools::{DETECT_KICKBACK_TRIANGLE, DETECT_VIN_CLONING, SHOP_CENTRALITY};
     use serde_json::{json, Value};
 
     fn done(tool: &str, args: Value, result: Result<Value, String>) -> ToolOutcome {

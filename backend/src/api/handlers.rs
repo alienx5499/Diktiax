@@ -101,7 +101,7 @@ pub async fn seed(State(state): Shared, headers: HeaderMap) -> ApiResult<Value> 
 }
 
 pub async fn mcp_tools() -> Json<Value> {
-    Json(json!({ "tools": crate::mcp::tool_definitions() }))
+    Json(json!({ "tools": crate::tools::tool_definitions() }))
 }
 
 #[derive(Deserialize)]
@@ -116,7 +116,7 @@ pub async fn mcp_call(
     body: Result<Json<McpCall>, JsonRejection>,
 ) -> ApiResult<Value> {
     let Json(call) = body?;
-    if !crate::mcp::tool_definitions()
+    if !crate::tools::tool_definitions()
         .iter()
         .any(|t| t.name == call.name)
     {
@@ -125,7 +125,7 @@ pub async fn mcp_call(
             call.name
         )));
     }
-    match crate::mcp::execute_tool(&state.repo, &call.name, &call.arguments).await {
+    match crate::tools::execute_tool(&state.repo, &call.name, &call.arguments).await {
         Ok(result) => Ok(Json(json!({ "tool": call.name, "result": result }))),
         // mcp argument validation errors all name the offending argument.
         Err(e) if e.contains("argument") => Err(ApiError::BadRequest(e)),

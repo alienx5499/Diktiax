@@ -17,7 +17,7 @@ fn request_carries_catalog_tools_and_opening_turn() {
     assert_eq!(body["model"], "m-test");
     assert_eq!(body["messages"][0]["role"], "user");
     let tools = body["tools"].as_array().expect("tools");
-    assert_eq!(tools.len(), crate::mcp::tool_definitions().len());
+    assert_eq!(tools.len(), crate::tools::tool_definitions().len());
     assert!(tools.iter().all(|t| t["name"].is_string()
         && t["input_schema"].is_object()
         && t["description"].is_string()));

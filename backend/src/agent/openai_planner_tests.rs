@@ -33,7 +33,7 @@ fn request_maps_catalog_to_openai_function_tools() {
     assert_eq!(body["messages"][0]["role"], "system");
     assert_eq!(body["messages"][1]["role"], "user");
     let tools = body["tools"].as_array().expect("tools");
-    assert_eq!(tools.len(), crate::mcp::tool_definitions().len());
+    assert_eq!(tools.len(), crate::tools::tool_definitions().len());
     assert!(tools.iter().all(|t| t["type"] == "function"
         && t["function"]["name"].is_string()
         && t["function"]["description"].is_string()
