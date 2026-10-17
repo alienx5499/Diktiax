@@ -187,3 +187,15 @@ fn reasoning_is_the_rationale_when_content_is_empty() {
     let calls = p.apply_response(response).expect("parsed");
     assert_eq!(calls[0].rationale, "Check VINs.");
 }
+
+#[test]
+fn groq_tool_validation_400_is_retryable_but_other_errors_are_not() {
+    let groq = r#"LLM API returned HTTP 400: {"error":{"message":"Tool call validation failed: attempted to call tool 'detect_kickback_triangle<...'","code":"tool_use_failed"}}"#;
+    assert!(is_tool_call_rejection(groq));
+    assert!(!is_tool_call_rejection(
+        "LLM API returned HTTP 401: invalid api key"
+    ));
+    assert!(!is_tool_call_rejection(
+        "LLM API returned HTTP 400: context length exceeded"
+    ));
+}

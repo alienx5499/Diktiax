@@ -7,6 +7,7 @@ mod evidence;
 mod fallback_planner;
 mod investigator;
 mod openai_planner;
+mod openai_wire;
 mod planner;
 mod rule_planner;
 mod verdict;

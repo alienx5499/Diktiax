@@ -3,6 +3,9 @@
 
 use super::claude_planner::SYSTEM_PROMPT;
 use super::evidence::compact;
+use super::openai_wire::{
+    is_tool_call_rejection, parse_arguments, retry_after_secs, TOOL_CALL_RETRY,
+};
 use super::planner::{PlannedCall, Planner, ToolOutcome};
 use serde_json::{json, Value};
 use std::time::Duration;
@@ -237,25 +240,6 @@ impl OpenAiPlanner {
     }
 }
 
-/// Seconds from a `retry-after` header (default 5 when absent or unparseable).
-fn retry_after_secs(headers: &reqwest::header::HeaderMap) -> u64 {
-    headers
-        .get(reqwest::header::RETRY_AFTER)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.trim().parse::<f64>().ok())
-        .map_or(5, |s| s.ceil().max(1.0) as u64)
-}
-
-/// `function.arguments` is a JSON *string* that must decode to an object.
-fn parse_arguments(raw: &str) -> Result<Value, String> {
-    let raw = if raw.trim().is_empty() { "{}" } else { raw };
-    match serde_json::from_str::<Value>(raw) {
-        Ok(v) if v.is_object() => Ok(v),
-        Ok(v) => Err(format!("tool arguments must be a JSON object, got: {v}")),
-        Err(e) => Err(format!("tool arguments are not valid JSON ({e}): {raw}")),
-    }
-}
-
 impl Planner for OpenAiPlanner {
     async fn plan(
         &mut self,
@@ -265,14 +249,24 @@ impl Planner for OpenAiPlanner {
         self.absorb(claim_id, history);
         for _ in 0..=MAX_REPAIRS {
             let body = self.request_body();
-            let response = self.send(&body).await.map_err(|e| self.redact(e))?;
+            let response = match self.send(&body).await {
+                Ok(r) => r,
+                // Groq rejects a garbled tool name with HTTP 400 `tool_use_failed`: ask again.
+                Err(e) if is_tool_call_rejection(&e) => {
+                    warn!("model sent a malformed tool call; asking again");
+                    self.messages
+                        .push(json!({ "role": "user", "content": TOOL_CALL_RETRY }));
+                    continue;
+                }
+                Err(e) => return Err(self.redact(e)),
+            };
             let calls = self.apply_response(response).map_err(|e| self.redact(e))?;
             if !self.needs_repair {
                 return Ok(calls);
             }
         }
         Err(format!(
-            "model sent unparseable tool arguments {} times in a row",
+            "model sent unusable tool calls {} times in a row",
             MAX_REPAIRS + 1
         ))
     }
