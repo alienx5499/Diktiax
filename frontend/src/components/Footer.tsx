@@ -20,7 +20,7 @@ export function Footer() {
 
         {/* Right: Security & Architecture spec */}
         <div className="text-zinc-400 font-mono text-[11px] uppercase tracking-wider">
-          FalkorDB Subgraph Architecture • SHA-256 Verified Provenance
+          FalkorDB Subgraph Architecture • SHA-256 Checkable Provenance
         </div>
       </div>
     </footer>

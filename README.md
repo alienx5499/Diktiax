@@ -1,4 +1,6 @@
-# Diktiax
+<p align="center"><img src="https://github.com/user-attachments/assets/64ac4e68-c1e4-4743-ad71-c44295e6e16b" alt="Diktiax logo" width="112"></p>
+
+<h1 align="center">Diktiax</h1>
 
 ![Diktiax: the graph picks the next query](https://github.com/user-attachments/assets/5ffa58e5-e0fc-4620-ae24-6b15aa393870)
 

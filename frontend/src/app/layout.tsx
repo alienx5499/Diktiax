@@ -8,10 +8,26 @@ const outfit = Outfit({
   weight: ['400', '500', '700', '900'],
 });
 
+const DESCRIPTION = 'An AI agent that finds insurance fraud rings by walking a FalkorDB graph, then acts on what it finds.';
+
 export const metadata: Metadata = {
-  title: 'Diktiax | Autonomous Graph AI Fraud Agent',
-  description:
-    'Autonomous Graph AI agent for high-velocity insurance fraud detection and multi-hop collision ring resolution using FalkorDB and Rust.',
+  metadataBase: new URL('https://diktiax.vercel.app'),
+  title: 'Diktiax | Graph AI Fraud Investigator',
+  description: DESCRIPTION,
+  openGraph: {
+    title: 'Diktiax: the graph picks the next query',
+    description: DESCRIPTION,
+    url: '/',
+    siteName: 'Diktiax',
+    images: [{ url: '/og.jpg', width: 1200, height: 630, alt: 'Diktiax: a fraud ring drawn as a graph' }],
+    type: 'website',
+  },
+  twitter: {
+    card: 'summary_large_image',
+    title: 'Diktiax: the graph picks the next query',
+    description: DESCRIPTION,
+    images: ['/og.jpg'],
+  },
 };
 
 export default function RootLayout({
