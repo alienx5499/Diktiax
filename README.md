@@ -12,9 +12,9 @@ Track 01, Agents That Act on Connected Data: FalkorDB "Graph Hacks: Context for 
 
 - **Live demo:** https://diktiax.vercel.app
 - **API:** https://diktiax.onrender.com
-- **Video (4K):** https://youtu.be/-oQFVZCy2VI
+- **Video (4K):** https://youtu.be/hlbGsdvg5xc
 
-https://github.com/user-attachments/assets/d5fea213-361a-4ff2-a882-0cd6afbcc88c
+https://github.com/user-attachments/assets/519e9543-4343-40a9-9755-1f001329adc3
 
 ## The problem
 
@@ -90,7 +90,15 @@ Seeded scenarios: a ghost-collision ring (CLM-48291, CLM-39102, CLM-44730), a cl
 
 ## The Cypher queries
 
-All detectors live in [`backend/src/db/queries.rs`](backend/src/db/queries.rs). Every value is passed as a parameter. Each one returns the node ids that form the evidence path.
+Every query below is copied verbatim from [`backend/src/db/queries.rs`](backend/src/db/queries.rs) (line breaks added). Every value is passed as a parameter, never formatted into the query text; the one exception is the exploration depth, which Cypher can't parameterize, so it's clamped to 1..4 first. Each detector returns the node ids that form the evidence path.
+
+**Explore the neighbourhood** (always the first step; the agent runs it with depth 3):
+
+```cypher
+MATCH p = (:Claim {id: $claim_id})-[*1..3]-()
+UNWIND relationships(p) AS r WITH DISTINCT r
+RETURN startNode(r) AS src, r AS rel, endNode(r) AS dst
+```
 
 **Ghost collision ring**: other claims at the same location, repaired at the same shop, within 90 days.
 
@@ -101,6 +109,7 @@ MATCH (c:Claim {id: $claim_id})<-[:TRIGGERED_CLAIM]-(:Accident)-[:OCCURRED_AT]->
 WHERE other.id <> c.id AND abs(other.filed_day - c.filed_day) <= $window_days
 RETURN c.id AS claim_id, loc.id AS location_id, shop.id AS shop_id,
        other.id AS linked_claim_id, abs(other.filed_day - c.filed_day) AS days_apart
+ORDER BY days_apart, linked_claim_id
 ```
 
 **Shared contact network**: claimants of other claims who share this claimant's phone or address.
@@ -112,6 +121,7 @@ WHERE peer.id <> me.id
 RETURN c.id AS claim_id, me.id AS customer_id, type(link) AS via,
        coalesce(contact.number, contact.line) AS contact, peer.id AS peer_id,
        peer.name AS peer_name, other.id AS linked_claim_id
+ORDER BY peer_id, linked_claim_id
 ```
 
 **Cloned VIN**: other vehicle registrations carrying the same VIN that also produced claims.
@@ -122,6 +132,7 @@ MATCH (c:Claim {id: $claim_id})<-[:TRIGGERED_CLAIM]-(:Accident)<-[:INVOLVED_IN]-
 WHERE other.id <> c.id
 RETURN c.id AS claim_id, v.id AS vehicle_id, v.jurisdiction AS jurisdiction, vin.vin AS vin,
        clone.id AS clone_vehicle_id, clone.jurisdiction AS clone_jurisdiction, other.id AS linked_claim_id
+ORDER BY linked_claim_id
 ```
 
 **Kickback triangle**: an unreported accident whose adjuster, shop and clinic recur together on other claims.
@@ -134,6 +145,7 @@ WHERE other.id <> c.id AND a.police_report_filed = false
 OPTIONAL MATCH (shop)-[ref:COLLUDES_WITH]->(clinic)
 RETURN c.id AS claim_id, adj.id AS adjuster_id, shop.id AS shop_id, clinic.id AS clinic_id,
        other.id AS linked_claim_id, ref IS NOT NULL AS referral_link
+ORDER BY linked_claim_id
 ```
 
 **Shop concentration** (degree centrality): a shop's claim count against the average across all shops. 1.5× or more is flagged.
@@ -142,6 +154,24 @@ RETURN c.id AS claim_id, adj.id AS adjuster_id, shop.id AS shop_id, clinic.id AS
 MATCH (s:RepairShop) OPTIONAL MATCH (s)<-[:REPAIRED_AT]-(c:Claim)
 RETURN s.id AS shop_id, s.name AS shop_name, count(c) AS degree
 ```
+
+**Acting on the verdict** (write-back): set the claim's status, record the investigation, and pick the investigator whose specialties best cover the matched patterns, with the fewest open cases.
+
+```cypher
+MATCH (c:Claim {id: $claim_id}) SET c.status = $status RETURN c.id AS claim_id
+
+MATCH (c:Claim {id: $claim_id})
+CREATE (c)-[:HAS_INVESTIGATION]->(i:Investigation {id: $certificate_id, decision: $decision,
+       risk_score: $risk_score, recorded_at: $recorded_at})
+RETURN i.id AS investigation_id
+
+MATCH (i:Investigator)
+WITH i, size([p IN $patterns WHERE p IN i.specialties]) AS coverage
+RETURN i.id AS id, i.name AS name, i.specialties AS specialties, i.open_cases AS open_cases, coverage
+ORDER BY coverage DESC, open_cases ASC, id ASC LIMIT 1
+```
+
+Runs on FalkorDB v4.22.1, the newest release of the 4.x line, pinned for reproducible demos.
 
 ## Why you can trust the verdict
 
@@ -162,7 +192,9 @@ RETURN s.id AS shop_id, s.name AS shop_name, count(c) AS degree
 | Evasive ring members (police report, small amounts) | 3 | 0/3 | 3/3 |
 | Honest claims with red flags (no police / high amount) | 2 | 2/2 | 0/2 |
 
-Fraud caught: rules 5/8, graph 8/8. Honest claims flagged: rules 2/5, graph 0/5. Rules catch careless fraud; the graph also catches organised fraud that learned the rules, because the ring still reuses its phone, crash location and body shop. The groups are small and constructed, so read this as a demonstration of the mechanism, not an accuracy benchmark.
+Fraud caught: rules 5/8, graph 8/8. Honest claims flagged: rules 2/5, graph 0/5. The labels were fixed by construction before anything ran.
+
+An LLM that also reads one claim at a time does no better. [`scripts/llm_only_baseline.py`](scripts/llm_only_baseline.py) shows `openai/gpt-oss-120b` (Groq, temperature 0) each claim's own file: amount, damage type, accident description, police-report flag, location and shop. Over 3 runs with identical answers it caught 5/8 fraud claims, missing all 3 evasive ring members, and flagged 1 of the 5 honest ones. Rules catch careless fraud; the graph also catches organised fraud that learned the rules, because the ring still reuses its phone, crash location and body shop. The groups are small and constructed, so read this as a demonstration of the mechanism, not an accuracy benchmark.
 
 ```bash
 cd backend && cargo test --test baseline -- --ignored --nocapture

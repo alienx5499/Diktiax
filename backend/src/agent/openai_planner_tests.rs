@@ -202,11 +202,12 @@ fn groq_tool_validation_400_is_retryable_but_other_errors_are_not() {
 
 #[test]
 fn rate_limit_waits_fail_over_on_daily_quota_or_spent_budget() {
-    assert!(within_wait_budget(9, 0), "per-minute limit: wait");
-    assert!(within_wait_budget(16, 29), "still inside the 45 s budget");
+    assert!(within_wait_budget(9, 0), "short per-minute limit: wait");
+    assert!(within_wait_budget(3, 6), "still inside the 10 s budget");
+    assert!(!within_wait_budget(16, 0), "long wait: fail over at once");
     assert!(
         !within_wait_budget(3600, 0),
         "daily quota: fail over at once"
     );
-    assert!(!within_wait_budget(20, 30), "budget spent: fail over");
+    assert!(!within_wait_budget(8, 5), "budget spent: fail over");
 }

@@ -3,10 +3,11 @@
 
 use serde_json::Value;
 
-/// One 429 wait longer than this means a daily quota, not a per-minute one: fail over.
-const MAX_RETRY_WAIT_SECS: u64 = 30;
-/// Total 429 waiting per investigation, so the dashboard's request never times out.
-const MAX_TOTAL_WAIT_SECS: u64 = 45;
+/// A 429 asking for longer than this is not worth waiting for in an interactive demo: fail over.
+const MAX_RETRY_WAIT_SECS: u64 = 10;
+/// Total 429 waiting per investigation. Kept short so a rate-limited demo falls back to the
+/// rule-based planner within seconds instead of making the user wait.
+const MAX_TOTAL_WAIT_SECS: u64 = 10;
 
 /// Whether waiting `wait` more seconds (after `waited` already) stays inside the budget.
 pub(super) fn within_wait_budget(wait: u64, waited: u64) -> bool {
