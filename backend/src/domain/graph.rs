@@ -25,6 +25,15 @@ pub struct SubgraphPayload {
     pub edges: Vec<GraphEdge>,
 }
 
+/// Claims in the same weakly connected component as `claim_id` (the claim itself included).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RingComponent {
+    pub claim_id: String,
+    /// Sorted claim ids.
+    pub claims: Vec<String>,
+    pub size: usize,
+}
+
 /// Degree centrality of one repair shop relative to the mean claim degree of all shops.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CentralityReport {

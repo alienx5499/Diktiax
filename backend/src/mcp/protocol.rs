@@ -17,8 +17,10 @@ const INSTRUCTIONS: &str =
     "Diktiax exposes a FalkorDB insurance-claim knowledge graph. Start with \
     get_claim, run the detect_* tools to test specific fraud-ring patterns, use list_claim_shops + \
     shop_centrality for repair-shop hubs, explore_claim_subgraph for raw context, \
-    investigation_history to continue from verdicts recorded in earlier sessions, or \
-    investigate_claim for a full autonomous verdict.";
+    investigation_history to continue from verdicts recorded in earlier sessions, \
+    ring_components for the whole ring a claim belongs to, or \
+    investigate_claim for a full autonomous verdict (an already recorded verdict is returned \
+    with reused: true unless force is set).";
 
 /// What to do with one inbound line.
 #[derive(Debug, Clone, PartialEq)]
@@ -264,11 +266,19 @@ mod tests {
     }
 
     #[test]
-    fn tools_list_has_ten_tools_with_strict_schemas() {
+    fn tools_list_has_eleven_tools_with_strict_schemas() {
         let r = respond(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#);
         let tools = r["result"]["tools"].as_array().cloned().unwrap_or_default();
-        assert_eq!(tools.len(), 10);
-        assert!(tools.iter().any(|t| t["name"] == "investigate_claim"));
+        assert_eq!(tools.len(), 11);
+        let investigate = tools.iter().find(|t| t["name"] == "investigate_claim");
+        let schema = investigate.map(|t| t["inputSchema"].clone());
+        assert_eq!(
+            schema.map(|s| (
+                s["properties"]["force"]["type"].clone(),
+                s["required"].clone()
+            )),
+            Some((json!("boolean"), json!(["claim_id"])))
+        );
         for t in &tools {
             let schema = &t["inputSchema"];
             assert_eq!(schema["type"], "object", "{}", t["name"]);
@@ -281,16 +291,19 @@ mod tests {
     #[test]
     fn investigation_history_is_external_only() {
         let planner = crate::tools::tool_definitions();
-        assert!(planner.iter().all(|t| t.name != "investigation_history"));
         let mcp = respond(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#);
         let mcp = mcp["result"]["tools"]
             .as_array()
             .cloned()
             .unwrap_or_default();
-        assert!(mcp.iter().any(|t| t["name"] == "investigation_history"));
-        assert!(external_tool_definitions()
-            .iter()
-            .any(|t| t.name == "investigation_history"));
+        for name in ["investigation_history", "ring_components"] {
+            assert!(planner.iter().all(|t| t.name != name), "{name}");
+            assert!(mcp.iter().any(|t| t["name"] == name), "{name}");
+            assert!(
+                external_tool_definitions().iter().any(|t| t.name == name),
+                "{name}"
+            );
+        }
     }
 
     #[test]

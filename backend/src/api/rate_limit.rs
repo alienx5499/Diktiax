@@ -10,6 +10,9 @@ use std::time::{Duration, Instant};
 /// (0 disables) for local dev and tests.
 pub const INVESTIGATE_COOLDOWN_SECS: u64 = 15;
 
+/// One `ring_components` call per visitor per this many seconds over HTTP (whole-graph algo.WCC).
+pub const RING_COMPONENTS_COOLDOWN_SECS: u64 = 3;
+
 /// Prune expired entries once the map grows past this, so memory stays bounded.
 const PRUNE_THRESHOLD: usize = 1_000;
 /// Hard cap on tracked visitors, even if all of them are still inside their cooldown.

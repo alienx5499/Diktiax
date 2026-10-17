@@ -1,6 +1,6 @@
 use claimgraph_backend::actions::{ActionDispatcher, Webhook};
 use claimgraph_backend::agent::{ClaimInvestigator, ClaudeConfig, OpenAiConfig, PlannerConfig};
-use claimgraph_backend::api::{create_router, AppState, Cooldown};
+use claimgraph_backend::api::{create_router, AppState, Cooldown, RING_COMPONENTS_COOLDOWN_SECS};
 use claimgraph_backend::config::AppConfig;
 use claimgraph_backend::db::FalkorGraphRepository;
 use claimgraph_backend::mcp;
@@ -59,6 +59,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 repo,
                 investigator,
                 investigate_cooldown: Cooldown::from_env(),
+                ring_cooldown: Cooldown::new(RING_COMPONENTS_COOLDOWN_SECS),
             };
             let app = create_router(state).into_make_service_with_connect_info::<SocketAddr>();
             axum::serve(listener, app).await?;

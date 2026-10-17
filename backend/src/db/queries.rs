@@ -118,10 +118,46 @@ pub const INGEST_CLAIM: &str = "MERGE (phone:Phone {number: $phone}) \
 pub const SET_CLAIM_STATUS: &str =
     "MATCH (c:Claim {id: $claim_id}) SET c.status = $status RETURN c.id AS claim_id";
 
-pub const RECORD_INVESTIGATION: &str = "MATCH (c:Claim {id: $claim_id}) \
+/// Records a verdict and links it to the claim's latest one: the Investigation node and
+/// HAS_INVESTIGATION edge are exactly what a first investigation has always written, plus
+/// `(new)-[:SUPERSEDES {superseded_id}]->(previous head)` when a head exists, or a disconnected
+/// InvestigationChain marker when it does not (nothing the dossier subgraph can reach).
+/// The head is the claim's investigation nothing supersedes yet (newest first when older,
+/// unchained verdicts exist).
+///
+/// One statement is not guaranteed to serialise on FalkorDB v4.22.1 (see ASSIGN_ONCE), so racing
+/// runs may read the same head. SUPERSEDES_CONSTRAINT (no verdict superseded twice) and
+/// CHAIN_ROOT_CONSTRAINT (one chain start per claim) reject the loser's commit, which rolls back
+/// whole; the caller re-runs it against the new head. Result: one linear chain per claim.
+/// Measured: without the constraints, 208 rounds x 16 concurrent runs on one claim never forked,
+/// and with them 21 rounds never hit a violation; this statement's read-to-commit window is too
+/// short to lose in practice. The constraints are what make the invariant a guarantee, and
+/// `chain_constraints_reject_a_fork` proves each one rejects the fork it exists for.
+pub const RECORD_CHAINED_INVESTIGATION: &str = "MATCH (c:Claim {id: $claim_id}) \
+     OPTIONAL MATCH (c)-[:HAS_INVESTIGATION]->(prev:Investigation) \
+     WHERE NOT ()-[:SUPERSEDES]->(prev) \
+     WITH c, prev ORDER BY prev.recorded_at DESC, prev.id DESC LIMIT 1 \
      CREATE (c)-[:HAS_INVESTIGATION]->(i:Investigation {id: $certificate_id, decision: $decision, \
      risk_score: $risk_score, recorded_at: $recorded_at}) \
+     FOREACH (p IN CASE WHEN prev IS NULL THEN [] ELSE [prev] END | \
+       CREATE (i)-[:SUPERSEDES {superseded_id: p.id}]->(p)) \
+     FOREACH (root IN CASE WHEN prev IS NULL THEN [1] ELSE [] END | \
+       CREATE (:InvestigationChain {claim_id: c.id})) \
      RETURN i.id AS investigation_id";
+
+/// Unique `(relationship type, property)`: a verdict is superseded at most once.
+pub const SUPERSEDES_CONSTRAINT: (&str, &str) = ("SUPERSEDES", "superseded_id");
+
+/// Unique `(label, property)`: one chain start (first recorded verdict) per claim.
+pub const CHAIN_ROOT_CONSTRAINT: (&str, &str) = ("InvestigationChain", "claim_id");
+
+/// `(investigation)-[:RELIED_ON]->(claim)` for each listed id that is an existing Claim (other
+/// ids, e.g. shops or phones from an evidence path, match nothing). Returns the edge count.
+pub const LINK_RELIED_ON: &str = "MATCH (i:Investigation {id: $investigation_id}) \
+     UNWIND $claim_ids AS cid \
+     MATCH (l:Claim {id: cid}) \
+     CREATE (i)-[:RELIED_ON]->(l) \
+     RETURN count(l) AS linked";
 
 /// Every recorded verdict for a claim, newest first. An unknown claim yields no rows; a known
 /// claim with no investigations yields one row of nulls (OPTIONAL MATCH).
@@ -137,15 +173,38 @@ pub const PICK_SIU_INVESTIGATOR: &str = "MATCH (i:Investigator) \
      RETURN i.id AS id, i.name AS name, i.specialties AS specialties, i.open_cases AS open_cases, coverage \
      ORDER BY coverage DESC, open_cases ASC, id ASC LIMIT 1";
 
-/// Idempotent assignment: open_cases grows only when the edge is first created.
-pub const ASSIGN_INVESTIGATOR: &str =
-    "MATCH (c:Claim {id: $claim_id}), (i:Investigator {id: $investigator_id}) \
-     MERGE (c)-[r:ASSIGNED_INVESTIGATOR]->(i) \
-     ON CREATE SET r.assigned_at = $assigned_at, i.open_cases = i.open_cases + 1 \
-     RETURN i.id AS id, i.name AS name, i.specialties AS specialties, i.open_cases AS open_cases";
+/// Check + pick + assign in one write statement: the existing assignment wins (its MERGE matches
+/// and changes nothing), otherwise the PICK_SIU_INVESTIGATOR choice gets the edge and
+/// open_cases + 1. No rows only when the graph holds no Investigator nodes (or no such claim).
+///
+/// One statement is not enough on its own: on FalkorDB v4.22.1, 32 concurrent runs of it on one
+/// claim (no unique constraint) created up to 16 edges, every round. ASSIGNMENT_CONSTRAINT
+/// (seeded, `r.claim_id` set here) is the guard: a duplicate commit fails and rolls back,
+/// open_cases included, and the caller re-runs the statement, which then finds the winner's edge.
+/// With the constraint in place, 20 rounds x 32 racing calls never even produced a violation.
+pub const ASSIGN_ONCE: &str = "MATCH (c:Claim {id: $claim_id}) \
+     OPTIONAL MATCH (c)-[:ASSIGNED_INVESTIGATOR]->(existing:Investigator) \
+     WITH c, collect(existing)[0] AS existing \
+     MATCH (i:Investigator) \
+     WITH c, existing, i, size([p IN $patterns WHERE p IN i.specialties]) AS coverage \
+     ORDER BY coverage DESC, i.open_cases ASC, i.id ASC LIMIT 1 \
+     WITH c, coalesce(existing, i) AS chosen \
+     MERGE (c)-[r:ASSIGNED_INVESTIGATOR]->(chosen) \
+     ON CREATE SET r.claim_id = c.id, r.assigned_at = $assigned_at, \
+     chosen.open_cases = chosen.open_cases + 1 \
+     RETURN chosen.id AS id, chosen.name AS name, chosen.specialties AS specialties, \
+     chosen.open_cases AS open_cases";
 
-/// The claim's current assignment, if any. Same columns as ASSIGN_INVESTIGATOR.
-pub const CLAIM_ASSIGNMENT: &str =
-    "MATCH (c:Claim {id: $claim_id})-[:ASSIGNED_INVESTIGATOR]->(i:Investigator) \
-     RETURN i.id AS id, i.name AS name, i.specialties AS specialties, i.open_cases AS open_cases \
-     LIMIT 1";
+/// Unique `(relationship type, property)`: at most one ASSIGNED_INVESTIGATOR edge per claim id.
+pub const ASSIGNMENT_CONSTRAINT: (&str, &str) = ("ASSIGNED_INVESTIGATOR", "claim_id");
+
+/// Claims weakly connected to `$claim_id` through shared customers, contacts, shops and clinics
+/// (same projection as the WCC cross-check test). An unknown claim yields no rows.
+/// Cost: algo.WCC labels the whole projected graph on every call, O(V+E), then keeps one
+/// component; well under the read timeout on the demo graph.
+pub const RING_COMPONENT: &str =
+    "CALL algo.WCC({nodeLabels: ['Customer','Claim','Phone','Address','RepairShop','Clinic'], \
+     relationshipTypes: ['FILED_CLAIM','HAS_PHONE','LIVES_AT','REPAIRED_AT','TREATED_AT']}) \
+     YIELD node, componentId WITH node, componentId WHERE node:Claim \
+     WITH componentId, collect(node.id) AS claims WHERE $claim_id IN claims \
+     RETURN claims";

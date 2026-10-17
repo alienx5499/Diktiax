@@ -130,6 +130,14 @@ impl ClaimInvestigator {
             .dispatch(&claim, &assessment, &patterns, &certificate)
             .await?;
         let subgraph = self.repo.claim_subgraph(claim_id, 3).await?;
+        // Written after the dossier subgraph is read, so a first investigation's subgraph is
+        // unchanged; later investigations' subgraphs show these edges.
+        self.repo
+            .link_relied_on(
+                &certificate.certificate_id,
+                &evidence::relied_on_candidates(claim_id, &patterns),
+            )
+            .await?;
         let agent_trace = evidence::agent_trace(&outcomes);
 
         Ok(InvestigationDossier {

@@ -2,19 +2,15 @@
 //! from the graph, and an optional webhook. Graph write failures propagate.
 
 use super::webhook::{Webhook, WebhookOutcome};
-use crate::db::{FalkorGraphRepository, Investigator};
+use crate::db::FalkorGraphRepository;
 use crate::domain::evaluator::FraudRiskAssessment;
 use crate::domain::{ClaimSummary, FraudPatternMatch, ProvenanceCertificate};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use tokio::sync::Mutex;
 use tracing::info;
 
 const OPERATOR: &str = "Diktiax Autonomous Agent";
-
-// One process-wide lock; the backend runs as a single instance. Multiple instances would need the check+assign in one Cypher statement.
-static ASSIGN_LOCK: Mutex<()> = Mutex::const_new(());
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ActionRecord {
@@ -83,23 +79,6 @@ impl ActionDispatcher {
         Self { repo, webhook }
     }
 
-    /// The claim's investigator: the existing assignment if there is one, else pick + assign.
-    /// `None` only when the graph holds no Investigator nodes.
-    async fn assign_once(
-        &self,
-        id: &str,
-        names: &[String],
-    ) -> Result<Option<Investigator>, String> {
-        let _guard = ASSIGN_LOCK.lock().await;
-        if let Some(existing) = self.repo.claim_assignment(id).await? {
-            return Ok(Some(existing));
-        }
-        match self.repo.pick_siu_investigator(names).await? {
-            Some(pick) => self.repo.assign_investigator(id, &pick.id).await.map(Some),
-            None => Ok(None),
-        }
-    }
-
     pub async fn dispatch(
         &self,
         claim: &ClaimSummary,
@@ -165,7 +144,7 @@ impl ActionDispatcher {
             );
 
             let names: Vec<String> = patterns.iter().map(|p| p.pattern_name.clone()).collect();
-            match self.assign_once(id, &names).await? {
+            match self.repo.assign_once(id, &names).await? {
                 Some(assigned) => {
                     log.push(record(
                         id,

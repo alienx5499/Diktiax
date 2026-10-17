@@ -1,11 +1,12 @@
 //! MCP stdio transport: newline-delimited JSON-RPC 2.0 on stdin/stdout.
 //! stdout carries protocol lines only; diagnostics go through `tracing` (stderr).
 
+use super::investigate::InvestigateClaim;
 use super::protocol::{route_line, tool_result, Route};
 use crate::agent::ClaimInvestigator;
 use crate::db::FalkorGraphRepository;
+use crate::tools::execute_external_tool;
 use crate::tools::INVESTIGATE_CLAIM;
-use crate::tools::{execute_external_tool, required_str};
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tracing::{info, warn};
@@ -13,16 +14,13 @@ use tracing::{info, warn};
 /// Everything a tool call may need.
 pub struct McpContext {
     pub repo: FalkorGraphRepository,
-    pub investigator: ClaimInvestigator,
+    pub investigate: InvestigateClaim,
 }
 
 impl McpContext {
     async fn call_tool(&self, name: &str, arguments: &Value) -> Result<Value, String> {
         if name == INVESTIGATE_CLAIM {
-            let claim_id = required_str(arguments, "claim_id")?;
-            let dossier = self.investigator.investigate(&claim_id).await?;
-            return serde_json::to_value(dossier)
-                .map_err(|e| format!("failed to serialize dossier: {e}"));
+            return self.investigate.call(arguments).await;
         }
         execute_external_tool(&self.repo, name, arguments).await
     }
@@ -53,7 +51,10 @@ pub async fn serve_stdio(
     repo: FalkorGraphRepository,
     investigator: ClaimInvestigator,
 ) -> Result<(), String> {
-    let ctx = McpContext { repo, investigator };
+    let ctx = McpContext {
+        investigate: InvestigateClaim::new(repo.clone(), investigator),
+        repo,
+    };
     let mut lines = BufReader::new(tokio::io::stdin()).lines();
     let mut stdout = tokio::io::stdout();
     info!("Diktiax MCP server listening on stdio");

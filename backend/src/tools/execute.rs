@@ -127,6 +127,10 @@ pub async fn execute_external_tool(
         let claim_id = required_str(args, "claim_id")?;
         return to_json(repo.investigation_history(&claim_id).await?);
     }
+    if name == catalog::RING_COMPONENTS {
+        let claim_id = required_str(args, "claim_id")?;
+        return to_json(repo.ring_component(&claim_id).await?);
+    }
     execute_tool(repo, name, args).await
 }
 
@@ -153,7 +157,12 @@ mod tests {
 
     #[test]
     fn agent_loop_cannot_parse_external_only_tools() {
-        assert!(parse_call(catalog::INVESTIGATION_HISTORY, &json!({ "claim_id": "C" })).is_err());
+        for name in [catalog::INVESTIGATION_HISTORY, catalog::RING_COMPONENTS] {
+            assert!(
+                parse_call(name, &json!({ "claim_id": "C" })).is_err(),
+                "{name}"
+            );
+        }
     }
 
     #[test]

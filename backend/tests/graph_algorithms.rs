@@ -93,3 +93,36 @@ async fn pagerank_ranks_the_ring_shop_first() {
         "SHOP-801 must lead strictly"
     );
 }
+
+/// The live `ring_components` tool (same WCC projection, read-only path) returns the ring.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "requires a live FalkorDB (docker compose up -d falkordb)"]
+async fn ring_components_tool_returns_the_ghost_ring() {
+    let graph = TestGraph::new("claimgraph_ring_it");
+    let repo = FalkorGraphRepository::connect(&graph.url, &graph.name)
+        .await
+        .expect("FalkorDB must be running for ignored integration tests");
+    repo.seed(true).await.expect("seed");
+
+    let result = claimgraph_backend::tools::execute_external_tool(
+        &repo,
+        "ring_components",
+        &serde_json::json!({ "claim_id": "CLM-48291" }),
+    )
+    .await
+    .expect("ring_components");
+    assert_eq!(
+        result,
+        serde_json::json!({
+            "claim_id": "CLM-48291",
+            "claims": ["CLM-39102", "CLM-44730", "CLM-48291"],
+            "size": 3,
+        })
+    );
+
+    let missing = repo.ring_component("CLM-NOPE").await.expect_err("unknown");
+    assert!(missing.contains("not found"), "{missing}");
+
+    drop(repo);
+    drop(graph);
+}

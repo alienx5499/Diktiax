@@ -56,6 +56,19 @@ pub fn scoring_patterns(
     Ok(patterns)
 }
 
+/// Ids a scored pattern's evidence path names, other than the target claim, deduplicated in
+/// first-seen order. Paths mix claims with shops, phones and the like; LINK_RELIED_ON keeps only
+/// ids of existing Claim nodes.
+pub fn relied_on_candidates(claim_id: &str, patterns: &[FraudPatternMatch]) -> Vec<String> {
+    let mut ids: Vec<String> = Vec::new();
+    for id in patterns.iter().flat_map(|p| &p.evidence_path) {
+        if id != claim_id && !ids.contains(id) {
+            ids.push(id.clone());
+        }
+    }
+    ids
+}
+
 /// One-line, human-readable digest of a tool result for the agent trace.
 pub fn summarize(o: &ToolOutcome) -> String {
     let value = match &o.result {

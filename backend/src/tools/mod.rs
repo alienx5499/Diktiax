@@ -7,7 +7,7 @@ mod execute;
 pub use catalog::{
     external_tool_definitions, tool_definitions, ToolDefinition, DETECT_GHOST_COLLISION,
     DETECT_KICKBACK_TRIANGLE, DETECT_SHARED_CONTACTS, DETECT_VIN_CLONING, EXPLORE_CLAIM_SUBGRAPH,
-    INVESTIGATION_HISTORY, LIST_CLAIM_SHOPS, SHOP_CENTRALITY,
+    INVESTIGATION_HISTORY, LIST_CLAIM_SHOPS, RING_COMPONENTS, SHOP_CENTRALITY,
 };
 pub(crate) use catalog::{investigate_claim_definition, INVESTIGATE_CLAIM};
 pub(crate) use execute::required_str;

@@ -140,6 +140,8 @@ pub struct McpCall {
 
 pub async fn mcp_call(
     State(state): Shared,
+    headers: HeaderMap,
+    peer: Option<Extension<ConnectInfo<SocketAddr>>>,
     body: Result<Json<McpCall>, JsonRejection>,
 ) -> ApiResult<Value> {
     let Json(call) = body?;
@@ -151,6 +153,18 @@ pub async fn mcp_call(
             "unknown tool '{}'",
             call.name
         )));
+    }
+    if call.name == crate::tools::RING_COMPONENTS {
+        let visitor = visitor_key(&headers, peer.map(|Extension(ConnectInfo(addr))| addr));
+        if let Err(wait) = state.ring_cooldown.check(&visitor) {
+            return Err(ApiError::RateLimited {
+                message: format!(
+                    "One ring_components call every {} s per visitor. Try again in {wait} s.",
+                    state.ring_cooldown.period_secs()
+                ),
+                retry_after_secs: wait,
+            });
+        }
     }
     match crate::tools::execute_external_tool(&state.repo, &call.name, &call.arguments).await {
         Ok(result) => Ok(Json(json!({ "tool": call.name, "result": result }))),

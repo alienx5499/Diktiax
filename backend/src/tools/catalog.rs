@@ -24,6 +24,8 @@ pub const SHOP_CENTRALITY: &str = "shop_centrality";
 pub const INVESTIGATE_CLAIM: &str = "investigate_claim";
 /// External-only (MCP + /api/mcp): never offered to the agent's own planners.
 pub const INVESTIGATION_HISTORY: &str = "investigation_history";
+/// External-only (MCP + /api/mcp): never offered to the agent's own planners.
+pub const RING_COMPONENTS: &str = "ring_components";
 
 pub const DEFAULT_DEPTH: u8 = 2;
 
@@ -149,17 +151,35 @@ pub fn external_tool_definitions() -> Vec<ToolDefinition> {
          decision, risk score, time. Use it to continue from earlier work instead of \
          re-investigating.",
     ));
+    tools.push(claim_id_only(
+        RING_COMPONENTS,
+        "Run FalkorDB's weakly connected components (algo.WCC) over customers, claims, phones, \
+         addresses, repair shops and clinics, and return every claim in the same component as \
+         this one. Use to see the whole ring a claim belongs to. Returns {claim_id, claims \
+         (sorted ids, including this claim), size}; errors if the claim id is unknown.",
+    ));
     tools
 }
 
 /// Definition of the MCP-only end-to-end investigation tool.
 pub fn investigate_claim_definition() -> ToolDefinition {
-    claim_id_only(
+    tool(
         INVESTIGATE_CLAIM,
         "Run Diktiax's full autonomous investigation on a claim: runs the graph detectors, scores \
          risk, issues a provenance certificate and EXECUTES remediation (high-risk claims get their \
          payout frozen, status changed in the graph and an SIU investigator assigned). Use when you \
-         want a complete, acted-upon verdict rather than read-only graph queries. Returns the \
-         investigation dossier.",
+         want a complete, acted-upon verdict rather than read-only graph queries. If the claim \
+         already has a recorded verdict it is returned instead, without re-running anything: \
+         {reused: true, claim_id, certificate_id, decision, risk_score, recorded_at}. Pass \
+         force: true to run a fresh investigation anyway. Otherwise returns the investigation \
+         dossier.",
+        json!({
+            "claim_id": claim_id_property(),
+            "force": {
+                "type": "boolean",
+                "description": "Run a fresh investigation even if a verdict is already recorded."
+            }
+        }),
+        &["claim_id"],
     )
 }

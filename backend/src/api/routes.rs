@@ -15,6 +15,9 @@ pub struct AppState {
     pub investigator: ClaimInvestigator,
     /// Per-visitor cooldown on `POST /api/investigate/{id}` (the only LLM-backed route).
     pub investigate_cooldown: Cooldown,
+    /// Per-visitor cooldown on the `ring_components` tool over HTTP: it runs algo.WCC over the
+    /// whole graph, so one visitor can't call it in a tight loop.
+    pub ring_cooldown: Cooldown,
 }
 
 pub fn create_router(state: AppState) -> Router {

@@ -103,3 +103,21 @@ fn every_detector_step_carries_cypher_and_aligns_with_trace() {
     assert_eq!(steps[4].cypher_source, queries::KICKBACK_TRIANGLE);
     assert_eq!(steps[5].cypher_source, "");
 }
+
+#[test]
+fn relied_on_candidates_skip_the_target_and_repeats() {
+    let m = |path: &[&str]| FraudPatternMatch {
+        pattern_name: "p".into(),
+        severity: "HIGH".into(),
+        risk_points: 1,
+        description: "d".into(),
+        cypher_query: "MATCH (c)".into(),
+        evidence_path: path.iter().map(|s| s.to_string()).collect(),
+    };
+    let patterns = [m(&["C1", "S1", "C2"]), m(&["C1", "C2", "C3"])];
+    assert_eq!(
+        relied_on_candidates("C1", &patterns),
+        vec!["S1".to_string(), "C2".into(), "C3".into()]
+    );
+    assert!(relied_on_candidates("C1", &[]).is_empty());
+}
