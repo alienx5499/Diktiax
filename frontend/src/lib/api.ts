@@ -139,7 +139,10 @@ export class ApiError extends Error {
   }
 }
 
-async function request<T>(path: string, init: RequestInit = {}, timeoutMs = 10000): Promise<T> {
+// A free-tier host can take up to a minute to wake from idle; wait that long before giving up.
+const DEFAULT_TIMEOUT_MS = 70000;
+
+async function request<T>(path: string, init: RequestInit = {}, timeoutMs = DEFAULT_TIMEOUT_MS): Promise<T> {
   let res: Response;
   try {
     res = await fetch(`${API_BASE}${path}`, {

@@ -239,13 +239,13 @@ This exposes the 8 read-only graph tools plus `investigate_claim`, which runs th
 
 ## Deploy
 
-FalkorDB and the backend run on Railway, and the frontend on Vercel.
+The backend runs on Render's free tier and the frontend on Vercel.
 
-1. **Railway, FalkorDB service:** image `falkordb/falkordb:v4.22.1`, variable `REDIS_ARGS=--requirepass <password>`, volume at `/data`, no public domain.
-2. **Railway, backend service:** `railway up` from the repo root (builds via [`railway.toml`](railway.toml)), with `FALKORDB_URL=falkor://default:<password>@falkordb.railway.internal:6379` and `ADMIN_TOKEN=<random>`. Then `railway domain`.
-3. **Vercel:** project root `frontend/`, with `NEXT_PUBLIC_API_BASE=https://<backend-domain>` set *before* building (it's inlined at build time).
+**Render, one container.** [`deploy/render/Dockerfile`](deploy/render/Dockerfile) packs FalkorDB (Redis + module, bound to loopback) and the backend into one image. The graph is in memory and re-seeded on every start, so a sleep or restart always comes back to the complete demo graph. On Render: New Web Service → this repo → Docker, Dockerfile path `deploy/render/Dockerfile`, instance type Free, health check `/api/health`, environment `GROQ_API_KEY`, `GROQ_MODEL`, `ADMIN_TOKEN`. Free services sleep after 15 minutes idle; an uptime pinger on `/api/health` every 10 minutes keeps it awake, and the dashboard waits up to 70 s for a cold start.
 
-The deployed demo is deliberately open: anyone can file and investigate claims on the synthetic graph. Only `POST /api/seed`, which wipes the graph, is locked, and it fails closed: it needs a matching `x-admin-token` header, and is refused outright if `ADMIN_TOKEN` isn't set (unless `DIKTIAX_DEV=1`, which `make run-backend` sets for local runsyes). Locally, Docker publishes every port on `127.0.0.1` only.
+**Vercel:** project root `frontend/`, install command `bun install`, and `NEXT_PUBLIC_API_BASE=https://<render-domain>` set *before* building (it's inlined at build time).
+
+The deployed demo is deliberately open: anyone can file and investigate claims on the synthetic graph. Only `POST /api/seed`, which wipes the graph, is locked, and it fails closed: it needs a matching `x-admin-token` header, and is refused outright if `ADMIN_TOKEN` isn't set (unless `DIKTIAX_DEV=1`, which `make run-backend` sets for local runs). Locally, Docker publishes every port on `127.0.0.1` only.
 
 ## API
 
