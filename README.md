@@ -1,10 +1,14 @@
 # Diktiax
 
+![Diktiax: the graph picks the next query](https://github.com/user-attachments/assets/5ffa58e5-e0fc-4620-ae24-6b15aa393870)
+
 **An investigation agent that finds insurance fraud rings by walking a FalkorDB graph, then acts on what it finds.**
 
 Track 01, Agents That Act on Connected Data: FalkorDB "Graph Hacks: Context for AI Agents".
 
-Demo video: _link coming_ · Live demo: _link coming_
+**Live demo:** https://diktiax.vercel.app (API: https://diktiax.onrender.com)
+
+https://github.com/user-attachments/assets/d5fea213-361a-4ff2-a882-0cd6afbcc88c
 
 ## The problem
 
@@ -16,6 +20,8 @@ An SIU (Special Investigation Unit) analyst reviews claims one at a time. Organi
 - two of the claimants share a phone number
 
 None of that lives in any single record, and a vector search over claim text can't find it either: it returns claims that *read* alike, not claims that are *connected*. In a graph, each of those signals is one short traversal.
+
+![Similar text vs shared connections: the same three claims in vector search and in the graph](https://github.com/user-attachments/assets/51da4099-e95e-4b19-a651-85cbf2bf6c23)
 
 ## What Diktiax does
 
@@ -29,7 +35,13 @@ Give it a claim id. The agent:
 
 Every step is returned as a trace: tool, arguments, why it was chosen, what came back, and how long it took.
 
+![Agent trace in the dashboard: each step with the planner's reason, arguments, result and Cypher](https://github.com/user-attachments/assets/b21dc007-fab2-49db-8205-0ff3e7397cf5)
+
+![The evidence path highlighted on the claim's subgraph](https://github.com/user-attachments/assets/6603f8b3-37ee-44ea-b292-46616146b59a)
+
 ## How the graph drives the agent
+
+![How the agent picks its next query](https://github.com/user-attachments/assets/dff36366-c272-4878-952c-f0bf7962c822)
 
 Real runs with the rule-based planner (`cargo run --release -- --investigate <id>`):
 
@@ -53,6 +65,11 @@ The planner explores, runs two detectors, and stops. It never calls `detect_shar
 
 Source of truth: [`data/seed.cypher`](data/seed.cypher) (68 nodes, 84 relationships) and the ingest/write-back queries in [`backend/src/db/queries.rs`](backend/src/db/queries.rs).
 
+![Diktiax graph model](https://github.com/user-attachments/assets/08832df0-c319-43d4-9fe0-6636edb16c99)
+
+<details>
+<summary>Same model as a Mermaid diagram</summary>
+
 ```mermaid
 flowchart LR
     Customer -->|FILED_CLAIM| Claim
@@ -70,6 +87,8 @@ flowchart LR
     Claim -.->|ASSIGNED_INVESTIGATOR| Investigator
     Claim -.->|HAS_INVESTIGATION| Investigation
 ```
+
+</details>
 
 Dashed relationships are written by the agent.
 
