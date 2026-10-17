@@ -112,7 +112,7 @@ fn truncate(s: &str, max: usize) -> String {
 
 /// What an LLM planner sees of a tool result: the one-line digest, plus `label:id` for every node
 /// of an explored subgraph so it can pick shops and linked claims. Capped in size.
-/// ponytail: raw JSON blew Groq's free-tier tokens/minute budget (every turn resends the history);
+/// Raw JSON blew Groq's tokens-per-minute budget (every turn resends the history);
 /// scoring and the trace still read the full result.
 pub fn compact(o: &ToolOutcome) -> String {
     const MAX_CHARS: usize = 1500;

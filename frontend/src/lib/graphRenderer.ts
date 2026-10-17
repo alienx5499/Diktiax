@@ -11,7 +11,7 @@ export function renderBauhausGraph(
   selectedClaimId: string,
   evidence: Set<string> | null = null,
 ) {
-  // ponytail: dimming only when an evidence set is non-empty; ids absent from the subgraph are ignored.
+  // Dimming only when an evidence set is non-empty; ids absent from the subgraph are ignored.
   const focus = evidence !== null && evidence.size > 0;
   // 1. Off-white Bauhaus Canvas Background
   ctx.fillStyle = '#F0F0F0';

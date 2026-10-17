@@ -1,6 +1,7 @@
 //! Router wiring: paths -> handlers, CORS and request tracing.
 
 use super::handlers;
+use super::rate_limit::Cooldown;
 use crate::agent::ClaimInvestigator;
 use crate::db::FalkorGraphRepository;
 use axum::routing::{get, post};
@@ -9,10 +10,11 @@ use std::sync::Arc;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::TraceLayer;
 
-#[derive(Clone)]
 pub struct AppState {
     pub repo: FalkorGraphRepository,
     pub investigator: ClaimInvestigator,
+    /// Per-visitor cooldown on `POST /api/investigate/{id}` (the only LLM-backed route).
+    pub investigate_cooldown: Cooldown,
 }
 
 pub fn create_router(state: AppState) -> Router {

@@ -23,7 +23,7 @@ impl TestGraph {
     }
 }
 
-// ponytail: Drop is sync, so cleanup runs on a throwaway thread with its own runtime and is
+// Drop is sync, so cleanup runs on a throwaway thread with its own runtime and is
 // best-effort (a hard kill or panic=abort can still leak a graph). Upgrade: a sweep of
 // `<base>_*` graphs at suite start.
 impl Drop for TestGraph {

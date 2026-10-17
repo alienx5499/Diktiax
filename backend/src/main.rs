@@ -1,6 +1,6 @@
 use claimgraph_backend::actions::{ActionDispatcher, Webhook};
 use claimgraph_backend::agent::{ClaimInvestigator, ClaudeConfig, OpenAiConfig, PlannerConfig};
-use claimgraph_backend::api::{create_router, AppState};
+use claimgraph_backend::api::{create_router, AppState, Cooldown};
 use claimgraph_backend::config::AppConfig;
 use claimgraph_backend::db::FalkorGraphRepository;
 use claimgraph_backend::mcp;
@@ -55,7 +55,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 format!("{}:{}", config.server_host, config.server_port).parse()?;
             let listener = tokio::net::TcpListener::bind(&addr).await?;
             info!("Listening on http://{addr}");
-            axum::serve(listener, create_router(AppState { repo, investigator })).await?;
+            let state = AppState {
+                repo,
+                investigator,
+                investigate_cooldown: Cooldown::from_env(),
+            };
+            let app = create_router(state).into_make_service_with_connect_info::<SocketAddr>();
+            axum::serve(listener, app).await?;
         }
     }
     Ok(())

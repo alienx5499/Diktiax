@@ -375,6 +375,8 @@ The deployed demo is deliberately open: anyone can file and investigate claims o
 | `GET /api/mcp/tools` · `POST /api/mcp/call` | The graph tool catalog over HTTP |
 | `POST /api/seed` · `GET /api/health` | Reset the demo graph (needs `x-admin-token`; local dev: `DIKTIAX_DEV=1`) · health check |
 
+- `POST /api/investigate` is limited to one request per visitor every 15 s (HTTP 429 with `Retry-After`), so one visitor can't use up the LLM quota for everyone.
+
 ## Limitations
 
 - The data is synthetic: the demo graph has 68 nodes and the scale benchmark uses 5,040 generated claims. That shows the mechanism on rings built the way the detectors expect, not real-world accuracy.

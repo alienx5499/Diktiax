@@ -13,7 +13,7 @@ use tracing::info;
 
 const OPERATOR: &str = "Diktiax Autonomous Agent";
 
-// ponytail: one process-wide lock; the backend runs as a single instance. Multiple instances would need the check+assign in one Cypher statement.
+// One process-wide lock; the backend runs as a single instance. Multiple instances would need the check+assign in one Cypher statement.
 static ASSIGN_LOCK: Mutex<()> = Mutex::const_new(());
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

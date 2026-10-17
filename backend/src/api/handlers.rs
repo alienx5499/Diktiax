@@ -1,15 +1,17 @@
 //! HTTP handlers. Validation errors are 400, unknown ids 404, FalkorDB failures 502.
 
 use super::error::ApiError;
+use super::rate_limit::visitor_key;
 use super::routes::AppState;
 use crate::agent::InvestigationDossier;
 use crate::domain::{ClaimSummary, InvestigationRecord, NewClaim, SubgraphPayload};
 use axum::extract::rejection::JsonRejection;
-use axum::extract::{Path, State};
+use axum::extract::{ConnectInfo, Path, State};
 use axum::http::{HeaderMap, StatusCode};
-use axum::Json;
+use axum::{Extension, Json};
 use serde::Deserialize;
 use serde_json::{json, Value};
+use std::net::SocketAddr;
 use std::sync::Arc;
 
 type Shared = State<Arc<AppState>>;
@@ -76,7 +78,20 @@ pub async fn investigation_history(
 pub async fn investigate(
     State(state): Shared,
     Path(id): Path<String>,
+    headers: HeaderMap,
+    // Optional so the router also works when served without connect info (e.g. in tests).
+    peer: Option<Extension<ConnectInfo<SocketAddr>>>,
 ) -> ApiResult<InvestigationDossier> {
+    let visitor = visitor_key(&headers, peer.map(|Extension(ConnectInfo(addr))| addr));
+    if let Err(wait) = state.investigate_cooldown.check(&visitor) {
+        return Err(ApiError::RateLimited {
+            message: format!(
+                "One investigation every {} s per visitor. Try again in {wait} s.",
+                state.investigate_cooldown.period_secs()
+            ),
+            retry_after_secs: wait,
+        });
+    }
     state
         .investigator
         .investigate(&id)

@@ -1,7 +1,7 @@
 //! Single API error type mapped to HTTP status codes with a JSON `{error}` body.
 
 use axum::extract::rejection::JsonRejection;
-use axum::http::StatusCode;
+use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde_json::json;
@@ -14,6 +14,11 @@ pub enum ApiError {
     Conflict(String),
     /// Missing or wrong admin token on a destructive route.
     Forbidden(String),
+    /// Per-visitor cooldown hit; sent as 429 with `Retry-After`.
+    RateLimited {
+        message: String,
+        retry_after_secs: u64,
+    },
     /// FalkorDB or another upstream dependency failed.
     Upstream(String),
     Internal(String),
@@ -37,6 +42,7 @@ impl ApiError {
             Self::BadRequest(_) => StatusCode::BAD_REQUEST,
             Self::Conflict(_) => StatusCode::CONFLICT,
             Self::Forbidden(_) => StatusCode::FORBIDDEN,
+            Self::RateLimited { .. } => StatusCode::TOO_MANY_REQUESTS,
             Self::Upstream(_) => StatusCode::BAD_GATEWAY,
             Self::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }
@@ -53,6 +59,13 @@ impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let status = self.status();
         let message = match self {
+            Self::RateLimited {
+                message,
+                retry_after_secs,
+            } => {
+                let headers = [(header::RETRY_AFTER, retry_after_secs.to_string())];
+                return (status, headers, Json(json!({ "error": message }))).into_response();
+            }
             Self::NotFound(m)
             | Self::BadRequest(m)
             | Self::Conflict(m)
