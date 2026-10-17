@@ -12,12 +12,7 @@ interface ForensicSectionsProps {
   isInvestigating: boolean;
 }
 
-export function ForensicSections({
-  dossier,
-  selectedClaimId,
-  onReinvestigate,
-  isInvestigating,
-}: ForensicSectionsProps) {
+export function ForensicSections({ dossier, selectedClaimId, onReinvestigate, isInvestigating }: ForensicSectionsProps) {
   return (
     <div className="space-y-12">
       {/* STEP 1: FORENSIC EVIDENCE & PROVENANCE (FIRST — FULL WIDTH) */}
@@ -41,11 +36,7 @@ export function ForensicSections({
           </span>
         </div>
 
-        <EvidenceCard
-          certificate={dossier.certificate}
-          riskScore={dossier.risk_score}
-          confidence={dossier.confidence}
-        />
+        <EvidenceCard certificate={dossier.certificate} riskScore={dossier.risk_score} confidence={dossier.confidence} />
       </section>
 
       {/* STEP 2: AUTONOMOUS ENFORCEMENT & REMEDIATION (SECOND — FULL WIDTH) */}

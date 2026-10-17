@@ -9,7 +9,7 @@ export function renderBauhausGraph(
   transform: { x: number; y: number; scale: number },
   hoveredNode: SimNode | null,
   selectedClaimId: string,
-  evidence: Set<string> | null = null
+  evidence: Set<string> | null = null,
 ) {
   // ponytail: dimming only when an evidence set is non-empty; ids absent from the subgraph are ignored.
   const focus = evidence !== null && evidence.size > 0;
@@ -107,9 +107,7 @@ export function renderBauhausGraph(
 
     // Node High-Contrast Label Card
     const labelText = (node.title || node.label).toUpperCase();
-    ctx.font = isTarget 
-      ? '900 12px var(--font-outfit), sans-serif'
-      : '700 11px var(--font-outfit), sans-serif';
+    ctx.font = isTarget ? '900 12px var(--font-outfit), sans-serif' : '700 11px var(--font-outfit), sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'top';
 

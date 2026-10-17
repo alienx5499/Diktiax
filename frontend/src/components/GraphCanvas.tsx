@@ -88,7 +88,7 @@ export function GraphCanvas({ subgraph, selectedClaimId, isInvestigating, eviden
         transformRef.current,
         hoveredNode,
         selectedClaimId,
-        evidenceIds
+        evidenceIds,
       );
 
       requestAnimationFrame(render);
@@ -102,7 +102,10 @@ export function GraphCanvas({ subgraph, selectedClaimId, isInvestigating, eviden
   }, [hoveredNode, selectedClaimId, evidenceIds, transformRef, draggingNodeRef]);
 
   return (
-    <div ref={containerRef} className="relative w-full h-[540px] bg-[#F0F0F0] border-2 lg:border-4 border-[#121212] shadow-[6px_6px_0px_0px_#121212] lg:shadow-[8px_8px_0px_0px_#121212] rounded-none overflow-hidden select-none">
+    <div
+      ref={containerRef}
+      className="relative w-full h-[540px] bg-[#F0F0F0] border-2 lg:border-4 border-[#121212] shadow-[6px_6px_0px_0px_#121212] lg:shadow-[8px_8px_0px_0px_#121212] rounded-none overflow-hidden select-none"
+    >
       <GraphCanvasHud
         vertexCount={subgraph.nodes.length}
         edgeCount={subgraph.edges.length}

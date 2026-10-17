@@ -30,9 +30,7 @@ export function AgentTrace({ trace, planner, evidence = [] }: AgentTraceProps) {
       </div>
 
       {steps.length === 0 ? (
-        <p className="pt-4 text-xs font-mono font-bold uppercase text-[#121212]/70">
-          No agent steps were recorded for this investigation.
-        </p>
+        <p className="pt-4 text-xs font-mono font-bold uppercase text-[#121212]/70">No agent steps were recorded for this investigation.</p>
       ) : (
         <ol className="pt-4 space-y-3">
           {steps.map(({ s, cypher }) => (
@@ -51,10 +49,12 @@ export function AgentTrace({ trace, planner, evidence = [] }: AgentTraceProps) {
                   </p>
                 )}
                 <p className="text-xs text-[#121212]/80">
-                  <span className="font-black uppercase">Why: </span>{s.rationale}
+                  <span className="font-black uppercase">Why: </span>
+                  {s.rationale}
                 </p>
                 <p className="text-xs text-[#121212]">
-                  <span className="font-black uppercase">Result: </span>{s.result_summary}
+                  <span className="font-black uppercase">Result: </span>
+                  {s.result_summary}
                 </p>
                 {cypher && (
                   <details className="pt-1">

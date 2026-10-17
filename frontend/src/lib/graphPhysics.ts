@@ -32,7 +32,7 @@ export function initializeSimGraph(
   subgraph: SubgraphPayload,
   selectedClaimId: string,
   width: number,
-  height: number
+  height: number,
 ): { nodes: SimNode[]; edges: SimEdge[] } {
   if (!subgraph || !subgraph.nodes || subgraph.nodes.length === 0) {
     return { nodes: [], edges: [] };
@@ -75,13 +75,7 @@ export function initializeSimGraph(
   return { nodes: simNodes, edges: simEdges };
 }
 
-export function stepGraphPhysics(
-  nodes: SimNode[],
-  edges: SimEdge[],
-  draggingNode: SimNode | null,
-  width: number,
-  height: number
-) {
+export function stepGraphPhysics(nodes: SimNode[], edges: SimEdge[], draggingNode: SimNode | null, width: number, height: number) {
   edges.forEach((edge) => {
     if (!edge.sourceNode || !edge.targetNode) return;
     const dx = edge.targetNode.x - edge.sourceNode.x;

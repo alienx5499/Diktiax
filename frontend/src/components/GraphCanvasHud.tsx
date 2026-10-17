@@ -86,9 +86,7 @@ export function GraphCanvasHud({
           className="absolute z-30 pointer-events-none p-4 bg-white border-2 lg:border-4 border-[#121212] shadow-[6px_6px_0px_0px_#121212] rounded-none max-w-sm"
         >
           <div className="flex items-center justify-between gap-3 mb-2">
-            <span className="text-sm font-black uppercase text-[#121212]">
-              {hoveredNode.title || hoveredNode.label}
-            </span>
+            <span className="text-sm font-black uppercase text-[#121212]">{hoveredNode.title || hoveredNode.label}</span>
             <span className="text-[10px] uppercase font-black px-2 py-0.5 bg-[#F0C020] border border-[#121212] rounded-none">
               {hoveredNode.group.replace(/_/g, ' ')}
             </span>

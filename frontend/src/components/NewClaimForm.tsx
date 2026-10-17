@@ -25,7 +25,11 @@ const inputCls =
   'w-full px-3 py-2 rounded-none bg-white border-2 border-[#121212] font-mono text-xs focus:outline-none focus:bg-[#FFFDF0] focus:shadow-[3px_3px_0px_0px_#1040C0]';
 
 function FieldError({ id, message }: { id: string; message?: string }) {
-  return message ? <span id={id} className="block text-[10px] font-mono font-bold normal-case text-[#D02020]">{message}</span> : null;
+  return message ? (
+    <span id={id} className="block text-[10px] font-mono font-bold normal-case text-[#D02020]">
+      {message}
+    </span>
+  ) : null;
 }
 
 export function NewClaimForm({ onCreated }: NewClaimFormProps) {
@@ -85,7 +89,10 @@ export function NewClaimForm({ onCreated }: NewClaimFormProps) {
       <fieldset disabled={pending} className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
         {FIELDS.map((f) => (
           <label key={f.name} className="space-y-1 text-[11px] font-black uppercase tracking-wider">
-            <span>{f.label}{f.required ? ' *' : ' (optional)'}</span>
+            <span>
+              {f.label}
+              {f.required ? ' *' : ' (optional)'}
+            </span>
             <input
               className={inputCls}
               value={values[f.name] ?? ''}
@@ -113,12 +120,19 @@ export function NewClaimForm({ onCreated }: NewClaimFormProps) {
           <FieldError id="amount-error" message={fieldErrors.amount} />
         </label>
         <label className="flex items-center gap-2 text-[11px] font-black uppercase tracking-wider self-end pb-2">
-          <input type="checkbox" checked={policeReport} onChange={(e) => setPoliceReport(e.target.checked)} className="w-4 h-4 accent-[#D02020]" />
+          <input
+            type="checkbox"
+            checked={policeReport}
+            onChange={(e) => setPoliceReport(e.target.checked)}
+            className="w-4 h-4 accent-[#D02020]"
+          />
           <span>Police report filed</span>
         </label>
       </fieldset>
       {error && (
-        <p role="alert" className="text-xs font-mono font-bold text-[#D02020] break-words">{error}</p>
+        <p role="alert" className="text-xs font-mono font-bold text-[#D02020] break-words">
+          {error}
+        </p>
       )}
       <button
         type="submit"

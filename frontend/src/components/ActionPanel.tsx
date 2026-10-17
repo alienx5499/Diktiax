@@ -13,13 +13,7 @@ interface ActionPanelProps {
   isInvestigating: boolean;
 }
 
-export function ActionPanel({
-  remediation,
-  riskScore,
-  claimId,
-  onReinvestigate,
-  isInvestigating,
-}: ActionPanelProps) {
+export function ActionPanel({ remediation, riskScore, claimId, onReinvestigate, isInvestigating }: ActionPanelProps) {
   const [overrideState, setOverrideState] = useState<'default' | 'overridden'>('default');
   const [showPayload, setShowPayload] = useState(false);
   const isFrozen = remediation.payout_frozen && overrideState !== 'overridden';
@@ -29,7 +23,7 @@ export function ActionPanel({
       particleCount: 60,
       spread: 70,
       origin: { y: 0.7 },
-      colors: ['#D02020', '#1040C0', '#F0C020', '#121212']
+      colors: ['#D02020', '#1040C0', '#F0C020', '#121212'],
     });
 
     const blob = new Blob([JSON.stringify(remediation, null, 2)], { type: 'application/json' });
@@ -58,9 +52,7 @@ export function ActionPanel({
               <Lock className="w-5 h-5 text-white" />
             </div>
             <div>
-              <h3 className="text-base font-black uppercase tracking-tight text-[#121212]">
-                Autonomous Enforcement Center
-              </h3>
+              <h3 className="text-base font-black uppercase tracking-tight text-[#121212]">Autonomous Enforcement Center</h3>
               <p className="text-xs font-bold uppercase tracking-wider text-[#121212]/70 mt-0.5">
                 Real-time policy remediation & disbursement lockdown
               </p>
@@ -88,7 +80,9 @@ export function ActionPanel({
               <div className="space-y-1">
                 <span className="text-sm font-black uppercase text-[#121212] block">ACH Settlement Escrow Lock</span>
                 <span className="text-xs text-[#121212]/80 leading-normal block">
-                  {isFrozen ? `Disbursement intercepted: $${remediation.frozen_amount.toLocaleString()} in forensic escrow.` : 'Straight-through processing authorized.'}
+                  {isFrozen
+                    ? `Disbursement intercepted: $${remediation.frozen_amount.toLocaleString()} in forensic escrow.`
+                    : 'Straight-through processing authorized.'}
                 </span>
               </div>
             </div>
@@ -143,7 +137,18 @@ export function ActionPanel({
         {/* Formatted JSON Payload Preview */}
         {showPayload && (
           <pre className="p-4 rounded-none bg-[#121212] border-2 border-[#121212] text-xs font-mono text-white overflow-x-auto leading-relaxed">
-            {JSON.stringify({ claim_id: claimId, risk_score: riskScore, payout_frozen: isFrozen, assigned_officer: remediation.assigned_investigator, webhook_target: remediation.webhook_target, webhook_dispatched: remediation.webhook_dispatched }, null, 2)}
+            {JSON.stringify(
+              {
+                claim_id: claimId,
+                risk_score: riskScore,
+                payout_frozen: isFrozen,
+                assigned_officer: remediation.assigned_investigator,
+                webhook_target: remediation.webhook_target,
+                webhook_dispatched: remediation.webhook_dispatched,
+              },
+              null,
+              2,
+            )}
           </pre>
         )}
 
@@ -154,7 +159,10 @@ export function ActionPanel({
           </span>
           <div className="space-y-2 font-mono text-xs">
             {remediation.actions_log.map((act) => (
-              <div key={act.id} className="p-3 rounded-none bg-[#F0F0F0] border-2 border-[#121212] shadow-[2px_2px_0px_0px_#121212] flex items-start justify-between gap-3 text-[#121212]">
+              <div
+                key={act.id}
+                className="p-3 rounded-none bg-[#F0F0F0] border-2 border-[#121212] shadow-[2px_2px_0px_0px_#121212] flex items-start justify-between gap-3 text-[#121212]"
+              >
                 <div className="flex items-start space-x-2.5">
                   <CheckCircle className="w-4 h-4 text-[#1040C0] shrink-0 mt-0.5" />
                   <div className="space-y-0.5">

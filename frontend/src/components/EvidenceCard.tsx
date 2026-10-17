@@ -10,10 +10,7 @@ interface EvidenceCardProps {
   confidence: number;
 }
 
-export function EvidenceCard({
-  certificate,
-  confidence,
-}: EvidenceCardProps) {
+export function EvidenceCard({ certificate, confidence }: EvidenceCardProps) {
   const [copied, setCopied] = useState(false);
   const [expandedStep, setExpandedStep] = useState<number | null>(1);
 
@@ -42,9 +39,7 @@ export function EvidenceCard({
               <Fingerprint className="w-5 h-5" />
             </div>
             <div>
-              <h3 className="text-base font-black uppercase tracking-tight text-[#121212]">
-                Cryptographic Evidence & Provenance
-              </h3>
+              <h3 className="text-base font-black uppercase tracking-tight text-[#121212]">Cryptographic Evidence & Provenance</h3>
               <p className="text-xs font-mono font-bold text-[#121212]/70 mt-0.5">
                 Certificate ID: <span className="text-[#121212]">{certificate.certificate_id}</span>
               </p>
@@ -52,9 +47,11 @@ export function EvidenceCard({
           </div>
 
           <div className="flex items-center space-x-2.5">
-            <span className={`text-xs font-mono font-black uppercase px-3 py-1 rounded-none border-2 border-[#121212] shadow-[2px_2px_0px_0px_#121212] ${
-              isHighRisk ? 'bg-[#D02020] text-white' : 'bg-[#F0C020] text-[#121212]'
-            }`}>
+            <span
+              className={`text-xs font-mono font-black uppercase px-3 py-1 rounded-none border-2 border-[#121212] shadow-[2px_2px_0px_0px_#121212] ${
+                isHighRisk ? 'bg-[#D02020] text-white' : 'bg-[#F0C020] text-[#121212]'
+              }`}
+            >
               {certificate.overall_decision.replace(/_/g, ' ')}
             </span>
             <span className="text-xs text-[#121212] font-mono font-black flex items-center gap-1.5 px-2.5 py-1 rounded-none bg-[#E0E0E0] border-2 border-[#121212] tabular">
@@ -109,7 +106,8 @@ export function EvidenceCard({
               Topological Traversal Hops ({certificate.topological_evidence.length})
             </span>
             <span className="text-xs font-mono text-[#121212]">
-              Confidence: <span className="font-black bg-[#F0C020] px-1.5 py-0.5 border border-[#121212]">{Math.round(confidence * 100)}%</span>
+              Confidence:{' '}
+              <span className="font-black bg-[#F0C020] px-1.5 py-0.5 border border-[#121212]">{Math.round(confidence * 100)}%</span>
             </span>
           </div>
 
@@ -117,7 +115,10 @@ export function EvidenceCard({
             {certificate.topological_evidence.map((step) => {
               const isExpanded = expandedStep === step.step_number;
               return (
-                <li key={step.step_number} className="border-2 border-[#121212] shadow-[3px_3px_0px_0px_#121212] rounded-none bg-white overflow-hidden transition-all">
+                <li
+                  key={step.step_number}
+                  className="border-2 border-[#121212] shadow-[3px_3px_0px_0px_#121212] rounded-none bg-white overflow-hidden transition-all"
+                >
                   <div
                     onClick={() => setExpandedStep(isExpanded ? null : step.step_number)}
                     className="p-3.5 flex items-start justify-between gap-3 cursor-pointer hover:bg-[#F0F0F0] transition-colors"
@@ -158,7 +159,6 @@ export function EvidenceCard({
             })}
           </ol>
         </div>
-
       </div>
     </div>
   );

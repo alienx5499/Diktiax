@@ -1,16 +1,17 @@
-import type { Metadata } from "next";
-import { Outfit } from "next/font/google";
-import "./globals.css";
+import type { Metadata } from 'next';
+import { Outfit } from 'next/font/google';
+import './globals.css';
 
 const outfit = Outfit({
-  variable: "--font-outfit",
-  subsets: ["latin"],
-  weight: ["400", "500", "700", "900"],
+  variable: '--font-outfit',
+  subsets: ['latin'],
+  weight: ['400', '500', '700', '900'],
 });
 
 export const metadata: Metadata = {
-  title: "Diktiax | Autonomous Graph AI Fraud Agent",
-  description: "Autonomous Graph AI agent for high-velocity insurance fraud detection and multi-hop collision ring resolution using FalkorDB and Rust.",
+  title: 'Diktiax | Autonomous Graph AI Fraud Agent',
+  description:
+    'Autonomous Graph AI agent for high-velocity insurance fraud detection and multi-hop collision ring resolution using FalkorDB and Rust.',
 };
 
 export default function RootLayout({
