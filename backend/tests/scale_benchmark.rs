@@ -3,6 +3,13 @@
 //! scoring), a stratified sample for the LLM-only script, and a results table to scripts/scale/.
 //! Requires a running FalkorDB:
 //!   cargo test --release --test scale_benchmark -- --ignored --nocapture
+//!
+//! Pre-registered run with another seed (key committed before the results):
+//!   SCALE_SEED=<n> cargo test --release --test scale_benchmark prereg_key -- --ignored
+//!   (commit scripts/scale/prereg/answer_key.*), then
+//!   SCALE_SEED=<n> cargo test --release --test scale_benchmark scale_benchmark -- --ignored --nocapture
+//! With SCALE_SEED set, output goes to scripts/scale/prereg/, the run fails unless the key hash
+//! equals the committed answer_key.sha256, and the default-seed headline asserts are skipped.
 
 mod common;
 
@@ -28,6 +35,17 @@ const CLINICS: u64 = 150;
 const ADJUSTERS: u64 = 40;
 const HIGH_AMOUNT: f64 = 25_000.0;
 const OUT: &str = "../scripts/scale";
+const PREREG_OUT: &str = "../scripts/scale/prereg";
+const DEFAULT_SEED: u64 = 20_261_018;
+
+/// `SCALE_SEED` if set (pre-registered mode), else None.
+fn prereg_seed() -> Option<u64> {
+    std::env::var("SCALE_SEED").ok().map(|s| {
+        s.replace('_', "")
+            .parse()
+            .expect("SCALE_SEED must be an integer")
+    })
+}
 
 /// Deterministic generator (SplitMix64) so the dataset is identical on every run.
 struct Rng(u64);
@@ -55,8 +73,8 @@ struct Labelled {
     group: String,
 }
 
-fn generate() -> Vec<Labelled> {
-    let mut rng = Rng(20_261_018);
+fn generate(seed: u64) -> Vec<Labelled> {
+    let mut rng = Rng(seed);
     let mut out = Vec::new();
     // Honest population: unique people, random providers. ~2% are households sharing an address,
     // and some draw the same shop and location by chance: realistic look-alikes.
@@ -185,25 +203,72 @@ impl Tally {
     }
 }
 
-#[tokio::test(flavor = "multi_thread")]
-#[ignore = "requires a live FalkorDB; generates 5,040 claims (about 95 s)"]
-async fn scale_benchmark() {
-    std::fs::create_dir_all(OUT).expect("output dir");
-    let data = generate();
-
-    // 1. Fix the answer key before anything is scored.
-    let key: Vec<_> = data
+/// Answer key JSON and its SHA-256 (hex). Labels alone are fixed by claim id and identical for
+/// every seed, so a pre-registered key also records the seed and the SHA-256 of the full
+/// generated claims: the hash then commits to the exact dataset that gets scored. The default
+/// key keeps its original format so the committed files stay reproducible.
+fn answer_key(data: &[Labelled], prereg_seed: Option<u64>) -> (String, String) {
+    let labels: Vec<_> = data
         .iter()
         .map(|l| json!({"claim_id": l.claim.claim_id, "fraud": l.fraud, "evasive": l.evasive}))
         .collect();
+    let key = match prereg_seed {
+        Some(seed) => {
+            let claims: Vec<_> = data.iter().map(|l| &l.claim).collect();
+            let dataset = serde_json::to_vec(&claims).expect("dataset json");
+            json!({"seed": seed, "dataset_sha256": hex::encode(Sha256::digest(dataset)), "labels": labels})
+        }
+        None => json!(labels),
+    };
     let key_json = serde_json::to_string_pretty(&key).expect("key json");
     let key_hash = hex::encode(Sha256::digest(key_json.as_bytes()));
-    std::fs::write(format!("{OUT}/answer_key.json"), &key_json).expect("write key");
+    (key_json, key_hash)
+}
+
+fn write_key(out: &str, key_json: &str, key_hash: &str) {
+    std::fs::write(format!("{out}/answer_key.json"), key_json).expect("write key");
     std::fs::write(
-        format!("{OUT}/answer_key.sha256"),
+        format!("{out}/answer_key.sha256"),
         format!("{key_hash}  answer_key.json\n"),
     )
     .expect("write hash");
+}
+
+/// Pre-registration step: writes only the answer key for `SCALE_SEED` to scripts/scale/prereg/.
+/// No graph, no scoring.
+#[test]
+#[ignore = "pre-registration step; needs SCALE_SEED"]
+fn prereg_key() {
+    let seed = prereg_seed().expect("set SCALE_SEED");
+    assert_ne!(seed, DEFAULT_SEED, "pre-register a new seed");
+    std::fs::create_dir_all(PREREG_OUT).expect("output dir");
+    let (key_json, key_hash) = answer_key(&generate(seed), Some(seed));
+    write_key(PREREG_OUT, &key_json, &key_hash);
+    println!("seed {seed}: answer key SHA-256 {key_hash}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "requires a live FalkorDB; generates 5,040 claims (about 95 s)"]
+async fn scale_benchmark() {
+    let prereg = prereg_seed();
+    let out = if prereg.is_some() { PREREG_OUT } else { OUT };
+    std::fs::create_dir_all(out).expect("output dir");
+    let data = generate(prereg.unwrap_or(DEFAULT_SEED));
+
+    // 1. Fix the answer key before anything is scored. Pre-registered mode never rewrites the
+    // key: it must match the committed hash.
+    let (key_json, key_hash) = answer_key(&data, prereg);
+    if let Some(seed) = prereg {
+        let committed = std::fs::read_to_string(format!("{out}/answer_key.sha256"))
+            .expect("pre-registered answer_key.sha256 (run prereg_key and commit it first)");
+        let committed = committed.split_whitespace().next().unwrap_or_default();
+        assert_eq!(
+            key_hash, committed,
+            "seed {seed}: answer key differs from the pre-registered hash"
+        );
+    } else {
+        write_key(out, &key_json, &key_hash);
+    }
 
     // 2. Load into a throwaway graph (seed(true) drops any leftover one; deleted on drop).
     // Named after the answer-key hash: the graph is identified by the data it was built from.
@@ -262,11 +327,14 @@ async fn scale_benchmark() {
                 "clinic": c.clinic_id, "adjuster": c.adjuster_id}}));
         }
     }
-    std::fs::write(
-        format!("{OUT}/llm_sample.json"),
-        serde_json::to_string_pretty(&sample).expect("sample"),
-    )
-    .expect("write sample");
+    // The LLM sample belongs to the default run only.
+    if prereg.is_none() {
+        std::fs::write(
+            format!("{out}/llm_sample.json"),
+            serde_json::to_string_pretty(&sample).expect("sample"),
+        )
+        .expect("write sample");
+    }
 
     let (mut rule_hits, mut agent_hits, mut audit_hits) = (vec![], vec![], vec![]);
     let mut by_group = String::from("| Group | Claims | Single-claim rules flagged | Graph agent flagged (payout frozen) | Graph agent sent to audit |\n|---|---|---|---|---|\n");
@@ -286,15 +354,22 @@ async fn scale_benchmark() {
         rules.row("Single-claim rules", evasive_total),
         graph_t.row("Diktiax graph agent", evasive_total)
     );
+    let title = match prereg {
+        Some(seed) => format!(
+            "Scale benchmark (pre-registered, seed {seed})\n\nThe answer key in this folder was \
+             committed before this file was generated; `git log` shows the order."
+        ),
+        None => "Scale benchmark".into(),
+    };
     let report = format!(
-        "# Scale benchmark\n\n{} claims: {HONEST} honest, {RINGS} tight rings x {RING_SIZE} ({EVASIVE_RINGS} evasive), \
+        "# {title}\n\n{} claims: {HONEST} honest, {RINGS} tight rings x {RING_SIZE} ({EVASIVE_RINGS} evasive), \
          {LOOSE_RINGS} loose rings x {RING_SIZE}. Answer key SHA-256 (fixed before scoring): `{key_hash}`.\n\n{table}\n\n{by_group}\n\
          Graph agent per investigation: median {:.1} ms, p95 {:.1} ms, max {:.1} ms (rule-based planner, \
          including verdict write-back). Loading {} claims took {load_s:.1} s.\n",
         data.len(), pct(0.5), pct(0.95), pct(1.0), data.len()
     );
     // Keep the hand-written sections (LLM-only run, honest reading) that follow the generated part.
-    let path = format!("{OUT}/RESULTS.md");
+    let path = format!("{out}/RESULTS.md");
     let notes = std::fs::read_to_string(&path)
         .ok()
         .and_then(|old| old.find("\n## ").map(|i| old[i..].to_string()))
@@ -303,7 +378,11 @@ async fn scale_benchmark() {
     println!("\n{report}");
 
     // Headline counts (groups: ring, evasive ring, loose ring, honest); checked after the files are written.
+    // They belong to the default seed; a pre-registered run is scored, not asserted.
     assert_eq!(data.len(), 5_040, "claims");
+    if prereg.is_some() {
+        return;
+    }
     assert_eq!(rule_hits, vec![120, 0, 0, 2_789], "per-claim rules");
     assert_eq!(agent_hits, vec![120, 80, 0, 0], "graph agent frozen");
     assert_eq!(audit_hits, vec![0, 0, 40, 169], "graph agent audit");
