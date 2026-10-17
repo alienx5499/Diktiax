@@ -1,7 +1,7 @@
 services:
   # FalkorDB: the graph database Diktiax reads and writes
   falkordb:
-    image: falkordb/falkordb:latest
+    image: falkordb/falkordb:v4.22.1
     container_name: claimgraph-falkordb
     ports:
       # Loopback only: FalkorDB has no password in local dev, so never publish it on all interfaces.
