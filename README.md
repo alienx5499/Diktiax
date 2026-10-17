@@ -144,10 +144,38 @@ RETURN s.id AS shop_id, s.name AS shop_name, count(c) AS degree
 ## Why you can trust the verdict
 
 - **Planners only choose which graph tools to call.** The score is computed by `FraudRiskEvaluator` ([`domain/evaluator.rs`](backend/src/domain/evaluator.rs)) from detector results on the target claim, capped at 100.
-- **Claude can't clear a claim by skipping checks.** With the Claude planner, any detector it didn't run is executed before scoring. Its closing text is labelled "not used for scoring".
-- **Bounded:** at most 12 tool calls per investigation. If the Claude API fails, the rule-based planner takes over and the dossier says so (`planner: rule-based (fallback: claude:... failed: ...)`).
-- **Never cleared on bad data:** if exploring the claim or any detector on it fails, the claim isn't cleared. It's marked `INCONCLUSIVE` with status `NEEDS_MANUAL_REVIEW`, and the failed calls are named in the rationale. Only an exact `LOW_RISK` result clears a claim.
+- **An LLM can't clear a claim by skipping checks.** With the Claude or Groq planner, any detector it didn't run is executed before scoring. Its closing text is labelled "not used for scoring".
+- **Bounded:** the planner gets at most 12 tool calls; the coverage guard can add up to 4 detector runs after that. If the LLM API fails, the rule-based planner takes over and the dossier says so (`planner: rule-based (fallback: groq:... failed: ...)`).
+- **Never cleared on bad data:** if exploring the claim or any detector on it fails, the score is only a lower bound (missing detectors can only add points). A bound that already reaches HIGH or CRITICAL still freezes the payout; anything lower becomes `INCONCLUSIVE` with status `NEEDS_MANUAL_REVIEW`, and the failed calls are named in the rationale. Only an exact `LOW_RISK` result clears a claim.
 - **Checkable:** each investigation returns a certificate with a SHA-256 digest over the claim id and the ordered steps, so a saved dossier can be re-hashed later to spot edits (the server doesn't store or verify it yet). Each detector step carries the Cypher that produced it.
+
+## Does the graph matter? (measured)
+
+[`backend/tests/baseline.rs`](backend/tests/baseline.rs) runs classic single-claim red-flag rules (no police report, or amount ≥ $25,000, reading only the claim and its own accident) against the graph agent. It uses the seeded claims plus two constructed groups: ring members who file police reports and keep amounts small, and honest drivers whose claims carry red flags.
+
+| Group | Claims | Per-claim rules flagged | Graph agent flagged |
+|---|---|---|---|
+| Seeded fraud (ring + cloned VIN) | 5 | 5/5 | 5/5 |
+| Seeded clean controls | 3 | 0/3 | 0/3 |
+| Evasive ring members (police report, small amounts) | 3 | 0/3 | 3/3 |
+| Honest claims with red flags (no police / high amount) | 2 | 2/2 | 0/2 |
+
+Fraud caught: rules 5/8, graph 8/8. Honest claims flagged: rules 2/5, graph 0/5. Rules catch careless fraud; the graph also catches organised fraud that learned the rules, because the ring still reuses its phone, crash location and body shop. The groups are small and constructed, so read this as a demonstration of the mechanism, not an accuracy benchmark.
+
+```bash
+cd backend && cargo test --test baseline -- --ignored --nocapture
+```
+
+Query latency, from [`scripts/bench_queries.py`](scripts/bench_queries.py): FalkorDB's server-side execution time, 200 runs after 10 warm-ups, FalkorDB v4.22.1 in Docker on a laptop, demo graph (68 nodes):
+
+| Query (on CLM-48291) | Median ms | p95 ms | Max ms |
+|---|---|---|---|
+| `explore_claim_subgraph` (3 hops) | 0.073 | 0.109 | 0.165 |
+| `detect_ghost_collision` | 0.141 | 0.168 | 0.260 |
+| `detect_shared_contacts` | 0.122 | 0.143 | 0.191 |
+| `detect_vin_cloning` | 0.126 | 0.151 | 0.248 |
+| `detect_kickback_triangle` | 0.157 | 0.187 | 0.265 |
+| `shop_centrality` | 0.048 | 0.071 | 0.162 |
 
 ## Architecture
 
@@ -213,7 +241,7 @@ This exposes the 8 read-only graph tools plus `investigate_claim`, which runs th
 
 FalkorDB and the backend run on Railway, and the frontend on Vercel.
 
-1. **Railway, FalkorDB service:** image `falkordb/falkordb`, variable `REDIS_ARGS=--requirepass <password>`, volume at `/data`, no public domain.
+1. **Railway, FalkorDB service:** image `falkordb/falkordb:v4.22.1`, variable `REDIS_ARGS=--requirepass <password>`, volume at `/data`, no public domain.
 2. **Railway, backend service:** `railway up` from the repo root (builds via [`railway.toml`](railway.toml)), with `FALKORDB_URL=falkor://default:<password>@falkordb.railway.internal:6379` and `ADMIN_TOKEN=<random>`. Then `railway domain`.
 3. **Vercel:** project root `frontend/`, with `NEXT_PUBLIC_API_BASE=https://<backend-domain>` set *before* building (it's inlined at build time).
 
