@@ -27,7 +27,9 @@ impl<P> FallbackPlanner<P> {
     pub fn label(&self, primary: &str) -> String {
         match &self.failure {
             None => primary.to_string(),
-            Some((error, _)) => format!("rule-based (fallback: {primary} failed: {error})"),
+            Some((error, _)) => {
+                format!("rule-based (fallback: {primary} failed: {})", brief(error))
+            }
         }
     }
 
@@ -79,6 +81,15 @@ impl<P: Planner + Send> Planner for FallbackPlanner<P> {
     }
 }
 
+/// First 80 characters of an error, for one-line labels.
+fn brief(error: &str) -> String {
+    const MAX: usize = 80;
+    match error.char_indices().nth(MAX) {
+        Some((cut, _)) => format!("{}…", &error[..cut]),
+        None => error.to_string(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -106,6 +117,13 @@ mod tests {
             "rule-based (fallback: claude:m failed: Anthropic API returned HTTP 529: {\"type\":\"overloaded_error\"})"
         );
         assert!(p.failure_note("claude:m").is_some());
+
+        let long = format!("LLM API returned HTTP 429: {}", "x".repeat(400));
+        assert_eq!(
+            brief(&long).chars().count(),
+            81,
+            "badge label stays one line"
+        );
 
         p.plan("C1", &[]).await.expect("still falls back");
         assert_eq!(p.primary.0, 1, "failed primary is not asked again");
