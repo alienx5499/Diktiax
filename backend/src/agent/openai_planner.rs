@@ -6,7 +6,7 @@ use super::evidence::compact;
 use super::openai_wire::{
     is_tool_call_rejection, parse_arguments, retry_after_secs, within_wait_budget, TOOL_CALL_RETRY,
 };
-use super::planner::{PlannedCall, Planner, ToolOutcome};
+use super::planner::{redact_key, PlannedCall, Planner, ToolOutcome};
 use serde_json::{json, Value};
 use std::time::Duration;
 use tracing::warn;
@@ -197,13 +197,6 @@ impl OpenAiPlanner {
     }
 
     /// Errors surface in logs and the dossier label: scrub the API key defensively.
-    fn redact(&self, error: String) -> String {
-        if self.config.api_key.is_empty() {
-            return error;
-        }
-        error.replace(&self.config.api_key, "[redacted]")
-    }
-
     async fn send(&mut self, body: &Value) -> Result<Value, String> {
         let url = format!("{}/chat/completions", self.config.base_url);
         let mut retries = 0;
@@ -263,9 +256,11 @@ impl Planner for OpenAiPlanner {
                         .push(json!({ "role": "user", "content": TOOL_CALL_RETRY }));
                     continue;
                 }
-                Err(e) => return Err(self.redact(e)),
+                Err(e) => return Err(redact_key(e, &self.config.api_key)),
             };
-            let calls = self.apply_response(response).map_err(|e| self.redact(e))?;
+            let calls = self
+                .apply_response(response)
+                .map_err(|e| redact_key(e, &self.config.api_key))?;
             if !self.needs_repair {
                 return Ok(calls);
             }

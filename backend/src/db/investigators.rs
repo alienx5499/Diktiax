@@ -38,6 +38,17 @@ impl FalkorGraphRepository {
         rows.first().map(investigator).transpose()
     }
 
+    /// Investigator already assigned to the claim, if any.
+    pub async fn claim_assignment(&self, claim_id: &str) -> Result<Option<Investigator>, String> {
+        let rows = self
+            .read_rows(
+                queries::CLAIM_ASSIGNMENT,
+                vec![("claim_id", text(claim_id))],
+            )
+            .await?;
+        rows.first().map(investigator).transpose()
+    }
+
     /// Writes `(Claim)-[:ASSIGNED_INVESTIGATOR]->(Investigator)` and returns the updated investigator.
     pub async fn assign_investigator(
         &self,

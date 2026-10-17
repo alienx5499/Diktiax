@@ -1,7 +1,7 @@
 //! Pure JSON-RPC 2.0 / MCP message routing. Classifies one inbound line and builds every
 //! response that does not need the graph; tool execution is left to the caller (`stdio.rs`).
 
-use crate::tools::{investigate_claim_definition, tool_definitions, ToolDefinition};
+use crate::tools::{external_tool_definitions, investigate_claim_definition, ToolDefinition};
 use serde_json::{json, Map, Value};
 
 pub const LATEST_PROTOCOL_VERSION: &str = "2025-06-18";
@@ -16,7 +16,8 @@ pub const INVALID_PARAMS: i64 = -32602;
 const INSTRUCTIONS: &str =
     "Diktiax exposes a FalkorDB insurance-claim knowledge graph. Start with \
     get_claim, run the detect_* tools to test specific fraud-ring patterns, use list_claim_shops + \
-    shop_centrality for repair-shop hubs, explore_claim_subgraph for raw context, or \
+    shop_centrality for repair-shop hubs, explore_claim_subgraph for raw context, \
+    investigation_history to continue from verdicts recorded in earlier sessions, or \
     investigate_claim for a full autonomous verdict.";
 
 /// What to do with one inbound line.
@@ -61,9 +62,9 @@ fn mcp_tool(def: ToolDefinition) -> Value {
     json!({ "name": def.name, "description": def.description, "inputSchema": def.input_schema })
 }
 
-/// Graph catalog plus the MCP-only `investigate_claim` tool.
+/// External catalog plus the MCP-only `investigate_claim` tool.
 pub fn list_tools() -> Value {
-    let tools: Vec<Value> = tool_definitions()
+    let tools: Vec<Value> = external_tool_definitions()
         .into_iter()
         .chain(std::iter::once(investigate_claim_definition()))
         .map(mcp_tool)
@@ -263,10 +264,10 @@ mod tests {
     }
 
     #[test]
-    fn tools_list_has_nine_tools_with_strict_schemas() {
+    fn tools_list_has_ten_tools_with_strict_schemas() {
         let r = respond(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#);
         let tools = r["result"]["tools"].as_array().cloned().unwrap_or_default();
-        assert_eq!(tools.len(), 9);
+        assert_eq!(tools.len(), 10);
         assert!(tools.iter().any(|t| t["name"] == "investigate_claim"));
         for t in &tools {
             let schema = &t["inputSchema"];
@@ -275,6 +276,21 @@ mod tests {
             assert!(schema["properties"].is_object() && schema["required"].is_array());
             assert!(t["description"].as_str().is_some_and(|d| d.len() > 40));
         }
+    }
+
+    #[test]
+    fn investigation_history_is_external_only() {
+        let planner = crate::tools::tool_definitions();
+        assert!(planner.iter().all(|t| t.name != "investigation_history"));
+        let mcp = respond(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#);
+        let mcp = mcp["result"]["tools"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        assert!(mcp.iter().any(|t| t["name"] == "investigation_history"));
+        assert!(external_tool_definitions()
+            .iter()
+            .any(|t| t.name == "investigation_history"));
     }
 
     #[test]

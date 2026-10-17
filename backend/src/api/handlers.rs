@@ -3,7 +3,7 @@
 use super::error::ApiError;
 use super::routes::AppState;
 use crate::agent::InvestigationDossier;
-use crate::domain::{ClaimSummary, NewClaim, SubgraphPayload};
+use crate::domain::{ClaimSummary, InvestigationRecord, NewClaim, SubgraphPayload};
 use axum::extract::rejection::JsonRejection;
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
@@ -61,6 +61,18 @@ pub async fn get_claim(State(state): Shared, Path(id): Path<String>) -> ApiResul
     }
 }
 
+pub async fn investigation_history(
+    State(state): Shared,
+    Path(id): Path<String>,
+) -> ApiResult<Vec<InvestigationRecord>> {
+    state
+        .repo
+        .investigation_history(&id)
+        .await
+        .map(Json)
+        .map_err(ApiError::from_upstream)
+}
+
 pub async fn investigate(
     State(state): Shared,
     Path(id): Path<String>,
@@ -101,7 +113,7 @@ pub async fn seed(State(state): Shared, headers: HeaderMap) -> ApiResult<Value> 
 }
 
 pub async fn mcp_tools() -> Json<Value> {
-    Json(json!({ "tools": crate::tools::tool_definitions() }))
+    Json(json!({ "tools": crate::tools::external_tool_definitions() }))
 }
 
 #[derive(Deserialize)]
@@ -116,7 +128,7 @@ pub async fn mcp_call(
     body: Result<Json<McpCall>, JsonRejection>,
 ) -> ApiResult<Value> {
     let Json(call) = body?;
-    if !crate::tools::tool_definitions()
+    if !crate::tools::external_tool_definitions()
         .iter()
         .any(|t| t.name == call.name)
     {
@@ -125,7 +137,7 @@ pub async fn mcp_call(
             call.name
         )));
     }
-    match crate::tools::execute_tool(&state.repo, &call.name, &call.arguments).await {
+    match crate::tools::execute_external_tool(&state.repo, &call.name, &call.arguments).await {
         Ok(result) => Ok(Json(json!({ "tool": call.name, "result": result }))),
         // mcp argument validation errors all name the offending argument.
         Err(e) if e.contains("argument") => Err(ApiError::BadRequest(e)),

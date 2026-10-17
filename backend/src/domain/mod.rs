@@ -4,7 +4,7 @@ pub mod entities;
 pub mod evaluator;
 pub mod graph;
 
-pub use claim::{ClaimSummary, NewClaim};
+pub use claim::{ClaimSummary, InvestigationRecord, NewClaim};
 pub use digest::ProvenanceDigestSigner;
 pub use entities::{FraudPatternMatch, ProvenanceCertificate, ProvenanceStep};
 pub use evaluator::FraudRiskEvaluator;

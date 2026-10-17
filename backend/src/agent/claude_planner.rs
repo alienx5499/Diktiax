@@ -1,7 +1,7 @@
 //! Claude-driven planner over the Anthropic Messages API. Claude chooses graph tools from the
 //! shared MCP catalog; tool results go back as `tool_result` blocks. Claude never scores.
 
-use super::planner::{PlannedCall, Planner, ToolOutcome};
+use super::planner::{redact_key, PlannedCall, Planner, ToolOutcome};
 use serde_json::{json, Value};
 use std::time::Duration;
 
@@ -160,13 +160,6 @@ impl ClaudePlanner {
     }
 
     /// Errors surface in logs and the dossier label: scrub the API key defensively.
-    fn redact(&self, error: String) -> String {
-        if self.config.api_key.is_empty() {
-            return error;
-        }
-        error.replace(&self.config.api_key, "[redacted]")
-    }
-
     async fn send(&self, body: &Value) -> Result<Value, String> {
         let response = self
             .config
@@ -203,8 +196,12 @@ impl Planner for ClaudePlanner {
     ) -> Result<Vec<PlannedCall>, String> {
         self.absorb(claim_id, history);
         let body = self.request_body();
-        let response = self.send(&body).await.map_err(|e| self.redact(e))?;
-        self.apply_response(response).map_err(|e| self.redact(e))
+        let response = self
+            .send(&body)
+            .await
+            .map_err(|e| redact_key(e, &self.config.api_key))?;
+        self.apply_response(response)
+            .map_err(|e| redact_key(e, &self.config.api_key))
     }
 
     fn narrative(&self) -> Option<&str> {

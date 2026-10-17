@@ -5,7 +5,7 @@ use super::protocol::{route_line, tool_result, Route};
 use crate::agent::ClaimInvestigator;
 use crate::db::FalkorGraphRepository;
 use crate::tools::INVESTIGATE_CLAIM;
-use crate::tools::{execute_tool, required_str};
+use crate::tools::{execute_external_tool, required_str};
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tracing::{info, warn};
@@ -24,7 +24,7 @@ impl McpContext {
             return serde_json::to_value(dossier)
                 .map_err(|e| format!("failed to serialize dossier: {e}"));
         }
-        execute_tool(&self.repo, name, arguments).await
+        execute_external_tool(&self.repo, name, arguments).await
     }
 }
 

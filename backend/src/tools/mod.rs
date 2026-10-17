@@ -4,11 +4,11 @@
 mod catalog;
 mod execute;
 
-pub(crate) use catalog::{investigate_claim_definition, INVESTIGATE_CLAIM};
 pub use catalog::{
-    tool_definitions, ToolDefinition, DETECT_GHOST_COLLISION, DETECT_KICKBACK_TRIANGLE,
-    DETECT_SHARED_CONTACTS, DETECT_VIN_CLONING, EXPLORE_CLAIM_SUBGRAPH, LIST_CLAIM_SHOPS,
-    SHOP_CENTRALITY,
+    external_tool_definitions, tool_definitions, ToolDefinition, DETECT_GHOST_COLLISION,
+    DETECT_KICKBACK_TRIANGLE, DETECT_SHARED_CONTACTS, DETECT_VIN_CLONING, EXPLORE_CLAIM_SUBGRAPH,
+    INVESTIGATION_HISTORY, LIST_CLAIM_SHOPS, SHOP_CENTRALITY,
 };
-pub use execute::execute_tool;
+pub(crate) use catalog::{investigate_claim_definition, INVESTIGATE_CLAIM};
 pub(crate) use execute::required_str;
+pub use execute::{execute_external_tool, execute_tool};

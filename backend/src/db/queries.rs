@@ -123,6 +123,14 @@ pub const RECORD_INVESTIGATION: &str = "MATCH (c:Claim {id: $claim_id}) \
      risk_score: $risk_score, recorded_at: $recorded_at}) \
      RETURN i.id AS investigation_id";
 
+/// Every recorded verdict for a claim, newest first. An unknown claim yields no rows; a known
+/// claim with no investigations yields one row of nulls (OPTIONAL MATCH).
+pub const INVESTIGATION_HISTORY: &str = "MATCH (c:Claim {id: $claim_id}) \
+     OPTIONAL MATCH (c)-[:HAS_INVESTIGATION]->(i:Investigation) \
+     RETURN i.id AS certificate_id, i.decision AS decision, i.risk_score AS risk_score, \
+     i.recorded_at AS recorded_at \
+     ORDER BY recorded_at DESC, certificate_id DESC";
+
 /// SIU investigator whose specialties best cover the matched patterns, least loaded first.
 pub const PICK_SIU_INVESTIGATOR: &str = "MATCH (i:Investigator) \
      WITH i, size([p IN $patterns WHERE p IN i.specialties]) AS coverage \
@@ -135,3 +143,9 @@ pub const ASSIGN_INVESTIGATOR: &str =
      MERGE (c)-[r:ASSIGNED_INVESTIGATOR]->(i) \
      ON CREATE SET r.assigned_at = $assigned_at, i.open_cases = i.open_cases + 1 \
      RETURN i.id AS id, i.name AS name, i.specialties AS specialties, i.open_cases AS open_cases";
+
+/// The claim's current assignment, if any. Same columns as ASSIGN_INVESTIGATOR.
+pub const CLAIM_ASSIGNMENT: &str =
+    "MATCH (c:Claim {id: $claim_id})-[:ASSIGNED_INVESTIGATOR]->(i:Investigator) \
+     RETURN i.id AS id, i.name AS name, i.specialties AS specialties, i.open_cases AS open_cases \
+     LIMIT 1";

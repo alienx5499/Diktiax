@@ -22,6 +22,8 @@ pub const LIST_CLAIM_SHOPS: &str = "list_claim_shops";
 pub const SHOP_CENTRALITY: &str = "shop_centrality";
 /// MCP-only: runs the full autonomous investigation (not part of the agent's own catalog).
 pub const INVESTIGATE_CLAIM: &str = "investigate_claim";
+/// External-only (MCP + /api/mcp): never offered to the agent's own planners.
+pub const INVESTIGATION_HISTORY: &str = "investigation_history";
 
 pub const DEFAULT_DEPTH: u8 = 2;
 
@@ -135,6 +137,19 @@ pub fn tool_definitions() -> Vec<ToolDefinition> {
             &["shop_id"],
         ),
     ]
+}
+
+/// Tools for external agents (MCP, /api/mcp): the planner catalog plus external-only memory
+/// tools. The agent's planners use `tool_definitions()` and never see these extras.
+pub fn external_tool_definitions() -> Vec<ToolDefinition> {
+    let mut tools = tool_definitions();
+    tools.push(claim_id_only(
+        INVESTIGATION_HISTORY,
+        "Past verdicts the Diktiax agent recorded for this claim, newest first: certificate id, \
+         decision, risk score, time. Use it to continue from earlier work instead of \
+         re-investigating.",
+    ));
+    tools
 }
 
 /// Definition of the MCP-only end-to-end investigation tool.

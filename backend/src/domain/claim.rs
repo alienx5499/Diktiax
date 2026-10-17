@@ -10,6 +10,15 @@ pub struct ClaimSummary {
     pub filed_at: String,
 }
 
+/// One past verdict the agent recorded for a claim (an `Investigation` node).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct InvestigationRecord {
+    pub certificate_id: String,
+    pub decision: String,
+    pub risk_score: i32,
+    pub recorded_at: String,
+}
+
 /// Command payload for filing a brand-new claim into the graph.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NewClaim {

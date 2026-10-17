@@ -27,6 +27,10 @@ pub fn create_router(state: AppState) -> Router {
             get(handlers::list_claims).post(handlers::create_claim),
         )
         .route("/api/claims/{id}", get(handlers::get_claim))
+        .route(
+            "/api/claims/{id}/investigations",
+            get(handlers::investigation_history),
+        )
         .route("/api/investigate/{id}", post(handlers::investigate))
         .route("/api/graph/{id}", get(handlers::graph))
         .route("/api/seed", post(handlers::seed))

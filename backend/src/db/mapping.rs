@@ -1,6 +1,6 @@
 //! FalkorDB row/value -> domain entity conversion. Every conversion error is propagated.
 
-use crate::domain::{ClaimSummary, GraphEdge, GraphNode};
+use crate::domain::{ClaimSummary, GraphEdge, GraphNode, InvestigationRecord};
 use falkordb::{Edge, FalkorValue, FromFalkorValue, Node, Row};
 use std::collections::HashMap;
 
@@ -26,6 +26,19 @@ pub fn claim_summary(row: &Row) -> Result<ClaimSummary, String> {
         status: col(row, "status")?,
         filed_at: col(row, "filed_at")?,
     })
+}
+
+/// `None` for the all-null row INVESTIGATION_HISTORY returns for a claim with no investigations.
+pub fn investigation_record(row: &Row) -> Result<Option<InvestigationRecord>, String> {
+    let Some(certificate_id) = col::<Option<String>>(row, "certificate_id")? else {
+        return Ok(None);
+    };
+    Ok(Some(InvestigationRecord {
+        certificate_id,
+        decision: col(row, "decision")?,
+        risk_score: col(row, "risk_score")?,
+        recorded_at: col(row, "recorded_at")?,
+    }))
 }
 
 /// Business key of a node: `id`, or the natural key of a shared contact/VIN node.

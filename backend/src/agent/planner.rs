@@ -63,3 +63,25 @@ pub trait Planner {
         None
     }
 }
+
+/// Hides the API key in error text; an empty key leaves the text unchanged.
+pub(super) fn redact_key(error: String, key: &str) -> String {
+    if key.is_empty() {
+        return error;
+    }
+    error.replace(key, "[redacted]")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::redact_key;
+
+    #[test]
+    fn redact_key_hides_every_occurrence_and_ignores_empty_key() {
+        assert_eq!(redact_key("key sk-1 sent".into(), ""), "key sk-1 sent");
+        assert_eq!(
+            redact_key("sk-1 rejected: sk-1".into(), "sk-1"),
+            "[redacted] rejected: [redacted]"
+        );
+    }
+}

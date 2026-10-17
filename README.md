@@ -6,15 +6,15 @@
 
 **An investigation agent that finds insurance fraud rings by walking a FalkorDB graph, then acts on what it finds.**
 
-Track 01, Agents That Act on Connected Data: FalkorDB "Graph Hacks: Context for AI Agents".
+Track 01, Agents That Act on Connected Data, and Track 02, Agent Memory and Coordination: FalkorDB "Graph Hacks: Context for AI Agents".
 
 ![Rust](https://img.shields.io/badge/Rust-1.99_·_Axum_0.8-B7410E?style=flat-square&logo=rust&logoColor=white) ![FalkorDB](https://img.shields.io/badge/FalkorDB-v4.22.1-7466FF?style=flat-square) ![Next.js](https://img.shields.io/badge/Next.js-16.4-000000?style=flat-square&logo=nextdotjs&logoColor=white) ![React](https://img.shields.io/badge/React-19.3-149ECA?style=flat-square&logo=react&logoColor=white) ![TypeScript](https://img.shields.io/badge/TypeScript-6-3178C6?style=flat-square&logo=typescript&logoColor=white) ![Tailwind CSS](https://img.shields.io/badge/Tailwind_CSS-4-06B6D4?style=flat-square&logo=tailwindcss&logoColor=white) ![Bun](https://img.shields.io/badge/Bun-1.3-000000?style=flat-square&logo=bun&logoColor=white) ![Groq](https://img.shields.io/badge/Groq-gpt--oss--120b-F55036?style=flat-square) ![Claude](https://img.shields.io/badge/Claude-MCP-D97757?style=flat-square&logo=anthropic&logoColor=white) ![Docker](https://img.shields.io/badge/Docker-compose-2496ED?style=flat-square&logo=docker&logoColor=white) ![Vercel](https://img.shields.io/badge/Vercel-frontend-000000?style=flat-square&logo=vercel&logoColor=white) ![Render](https://img.shields.io/badge/Render-backend-46E3B7?style=flat-square&logo=render&logoColor=white)
 
 - **Live demo:** https://diktiax.vercel.app
 - **API:** https://diktiax.onrender.com
-- **Video (4K):** https://youtu.be/9PGixXLjd4k
+- **Video (4K):** https://youtu.be/LZfy5o2mVDY
 
-https://github.com/user-attachments/assets/00bdd135-0537-46dc-9d42-7bb2266bc7f2
+https://github.com/user-attachments/assets/d0a85e78-28cc-4b8d-aef5-4c8555119ce0
 
 ## The problem
 
@@ -283,7 +283,7 @@ Entity resolution is tested too: [`ingest_merges_shared_contacts`](backend/tests
 
 ![Diktiax architecture: Vercel dashboard, Render container with the Rust agent and FalkorDB, Groq planner, Claude over MCP](https://github.com/user-attachments/assets/1ff17889-0d11-41e4-a3f9-9fcf21e3c726)
 
-The agent, the HTTP API and the MCP server all use the same tool catalog, so Claude calls exactly the tools the agent calls. In production FalkorDB and the backend share one Render container, with FalkorDB bound to loopback; locally they run as two Docker services.
+The agent, the HTTP API and the MCP server all use the same tool catalog, so Claude calls the same graph tools the agent calls, plus two that only outside agents get: `investigate_claim` and `investigation_history`. In production FalkorDB and the backend share one Render container, with FalkorDB bound to loopback; locally they run as two Docker services.
 
 - **Backend:** Rust 1.99 (Axum 0.8, Tokio 1.53, `falkordb` crate 0.10, reqwest 0.13 with rustls). FalkorDB v4.22.1 is the only database.
 - **Frontend:** Next.js 16.4 / React 19.3, TypeScript 6, Tailwind CSS 4, Bun. Agent trace timeline, live graph canvas, claim intake form.
@@ -337,7 +337,17 @@ cd backend && cargo build --release
 claude mcp add diktiax -e FALKORDB_URL=falkor://127.0.0.1:6379 -- "$PWD/target/release/claimgraph-backend" --mcp-server
 ```
 
-This exposes the 8 read-only graph tools plus `investigate_claim`, which runs the full agent and **writes to the graph**. For Claude Desktop, use the same command and args in `claude_desktop_config.json`.
+This exposes the 8 read-only graph tools, `investigation_history` (read-only, past verdicts) and `investigate_claim`, which runs the full agent and **writes to the graph**. For Claude Desktop, use the same command and args in `claude_desktop_config.json`.
+
+## Memory and coordination
+
+Diktiax keeps its own memory in the graph, and other agents can read it.
+
+- **Verdicts outlive the session.** Every investigation writes an `Investigation` node (certificate id, decision, risk score, time) under the claim, and re-investigating adds another one, so the graph holds the full history. `GET /api/claims/{id}/investigations` and the MCP tool `investigation_history` return it newest first. [`verdicts_survive_across_sessions`](backend/tests/agent_memory.rs) investigates a claim, drops the client, connects a new one and checks the same certificate comes back, then investigates again and gets two entries.
+- **Other agents pick up where Diktiax left off.** `investigation_history` is served over MCP and HTTP, so Claude or any MCP client can see what the agent already decided instead of re-running it. The agent's own planners never see this tool (a unit test checks it), so a past verdict can't stand in for fresh evidence.
+- **Shared state with the SIU team.** Assigning an investigator raises their `open_cases` in the graph, and the next case goes to the investigator whose specialties best cover the matched patterns, least loaded first, so earlier investigations shape later assignments. A claim keeps its first investigator: re-investigating it reuses the existing assignment instead of picking again, so `open_cases` only rises once.
+- **Consistent under concurrency.** [`concurrent_investigations_keep_shared_state_consistent`](backend/tests/agent_memory.rs) runs 16 investigations at once (every claim twice) and checks there are exactly 16 verdicts, one investigator per flagged claim, and an `open_cases` increase equal to the number of claims assigned. Writing it caught a real race (two concurrent runs could assign a claim twice), fixed by checking for an existing assignment under a lock.
+- **Handoff between planners.** If the LLM planner fails mid-run, the rule-based planner continues from the same step history rather than starting over, and the dossier records where it took over.
 
 ## Deploy
 

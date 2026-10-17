@@ -116,6 +116,20 @@ pub async fn execute_tool(
     run(repo, parse_call(name, args)?).await
 }
 
+/// Entry point for external callers (MCP, /api/mcp/call): `execute_tool` plus the external-only
+/// tools, which the agent loop (it calls `execute_tool`) can therefore never run.
+pub async fn execute_external_tool(
+    repo: &FalkorGraphRepository,
+    name: &str,
+    args: &Value,
+) -> Result<Value, String> {
+    if name == catalog::INVESTIGATION_HISTORY {
+        let claim_id = required_str(args, "claim_id")?;
+        return to_json(repo.investigation_history(&claim_id).await?);
+    }
+    execute_tool(repo, name, args).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -135,6 +149,11 @@ mod tests {
                 def.name
             );
         }
+    }
+
+    #[test]
+    fn agent_loop_cannot_parse_external_only_tools() {
+        assert!(parse_call(catalog::INVESTIGATION_HISTORY, &json!({ "claim_id": "C" })).is_err());
     }
 
     #[test]

@@ -136,7 +136,7 @@ fn malformed_response_is_an_error() {
 fn errors_never_carry_the_api_key() {
     let p = planner();
     assert_eq!(
-        p.redact("HTTP 401: bad key gsk-test-key".into()),
+        redact_key("HTTP 401: bad key gsk-test-key".into(), &p.config.api_key),
         "HTTP 401: bad key [redacted]"
     );
 }

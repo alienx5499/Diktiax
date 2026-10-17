@@ -1,9 +1,11 @@
 //! FalkorDB-backed graph repository: connection, claim reads and claim writes.
 //! Seeding lives in `seed.rs`, detectors and centrality in `detectors.rs`.
 
-use super::mapping::{claim_summary, col, graph_edge, graph_node, node_key, opt_text, text};
+use super::mapping::{
+    claim_summary, col, graph_edge, graph_node, investigation_record, node_key, opt_text, text,
+};
 use super::queries;
-use crate::domain::{ClaimSummary, NewClaim, SubgraphPayload};
+use crate::domain::{ClaimSummary, InvestigationRecord, NewClaim, SubgraphPayload};
 use chrono::Utc;
 use falkordb::{
     AsyncGraph, Edge, FalkorClientBuilder, FalkorConnectionInfo, FalkorResult, FalkorValue, Node,
@@ -108,6 +110,25 @@ impl FalkorGraphRepository {
             .read_rows(&queries::get_claim(), vec![("claim_id", text(claim_id))])
             .await?;
         rows.first().map(claim_summary).transpose()
+    }
+
+    /// Past verdicts for a claim, newest first; empty when never investigated.
+    pub async fn investigation_history(
+        &self,
+        claim_id: &str,
+    ) -> Result<Vec<InvestigationRecord>, String> {
+        let rows = self
+            .read_rows(
+                queries::INVESTIGATION_HISTORY,
+                vec![("claim_id", text(claim_id))],
+            )
+            .await?;
+        if rows.is_empty() {
+            return Err(format!("claim {claim_id} not found"));
+        }
+        rows.iter()
+            .filter_map(|row| investigation_record(row).transpose())
+            .collect()
     }
 
     pub async fn claim_shops(&self, claim_id: &str) -> Result<Vec<String>, String> {
