@@ -6,7 +6,9 @@
 
 Track 01, Agents That Act on Connected Data: FalkorDB "Graph Hacks: Context for AI Agents".
 
-**Live demo:** https://diktiax.vercel.app (API: https://diktiax.onrender.com)
+![Rust](https://img.shields.io/badge/Rust-1.99_·_Axum_0.8-B7410E?style=flat-square&logo=rust&logoColor=white) ![FalkorDB](https://img.shields.io/badge/FalkorDB-v4.22.1-7466FF?style=flat-square) ![Next.js](https://img.shields.io/badge/Next.js-16.4-000000?style=flat-square&logo=nextdotjs&logoColor=white) ![React](https://img.shields.io/badge/React-19.3-149ECA?style=flat-square&logo=react&logoColor=white) ![TypeScript](https://img.shields.io/badge/TypeScript-6-3178C6?style=flat-square&logo=typescript&logoColor=white) ![Tailwind CSS](https://img.shields.io/badge/Tailwind_CSS-4-06B6D4?style=flat-square&logo=tailwindcss&logoColor=white) ![Bun](https://img.shields.io/badge/Bun-1.3-000000?style=flat-square&logo=bun&logoColor=white) ![Groq](https://img.shields.io/badge/Groq-gpt--oss--120b-F55036?style=flat-square) ![Claude](https://img.shields.io/badge/Claude-MCP-D97757?style=flat-square&logo=anthropic&logoColor=white) ![Docker](https://img.shields.io/badge/Docker-compose-2496ED?style=flat-square&logo=docker&logoColor=white) ![Vercel](https://img.shields.io/badge/Vercel-frontend-000000?style=flat-square&logo=vercel&logoColor=white) ![Render](https://img.shields.io/badge/Render-backend-46E3B7?style=flat-square&logo=render&logoColor=white)
+
+**Live demo:** https://diktiax.vercel.app (API: https://diktiax.onrender.com) · **Video (4K):** https://youtu.be/-oQFVZCy2VI
 
 https://github.com/user-attachments/assets/d5fea213-361a-4ff2-a882-0cd6afbcc88c
 
@@ -198,27 +200,57 @@ Query latency, from [`scripts/bench_queries.py`](scripts/bench_queries.py): Falk
 
 ## Architecture
 
+![Diktiax architecture: Vercel dashboard, Render container with the Rust agent and FalkorDB, Groq planner, Claude over MCP](https://github.com/user-attachments/assets/1ff17889-0d11-41e4-a3f9-9fcf21e3c726)
+
+<details>
+<summary>Same architecture as a Mermaid diagram</summary>
+
 ```mermaid
 flowchart LR
-    UI["Next.js dashboard"] -->|HTTP| API["Rust / Axum API"]
-    MCPC["Claude Desktop / Claude Code"] -->|MCP stdio| MCP["MCP server"]
-    API --> INV["Investigator loop"]
-    MCP --> INV
-    INV --> PL{"Planner"}
-    PL --> RB["Graph-driven rules"]
-    PL --> CL["Claude tool use"]
-    PL --> GQ["Groq tool use (free tier)"]
-    INV --> CAT["Graph tool catalog (8 tools)"]
-    MCP --> CAT
-    CAT --> DB[("FalkorDB")]
-    INV --> EVAL["Deterministic scorer"] --> ACT["Actions: status, investigation, SIU assignment, webhook"]
-    ACT --> DB
+    subgraph Vercel["Vercel"]
+        UI["Next.js 16 dashboard<br/>React 19 · Tailwind 4"]
+    end
+    subgraph Render["Render: one container"]
+        API["Rust · Axum 0.8 API"]
+        INV["Investigator loop"]
+        PL{"Planner"}
+        CAT["Graph tool catalog<br/>8 Cypher tools"]
+        EVAL["Deterministic scorer"]
+        ACT["Actions<br/>status · investigation · SIU · webhook"]
+        DB[("FalkorDB v4.22.1<br/>loopback only")]
+    end
+    GROQ["Groq<br/>gpt-oss-120b"]
+    CLAUDE["Claude Desktop / Code"]
+    MCP["MCP server<br/>stdio"]
+
+    UI -->|HTTPS| API
+    API --> INV --> PL
+    PL -->|rules · Groq · Claude| CAT
+    PL <-.->|tool calls| GROQ
+    CAT -->|Cypher| DB
+    INV --> EVAL --> ACT -->|write verdict| DB
+    CLAUDE -->|MCP| MCP --> CAT
+
+    classDef web fill:#111111,stroke:#111111,color:#ffffff
+    classDef rust fill:#FBE3D6,stroke:#B7410E,color:#5A1F06
+    classDef fdb fill:#EEEBFF,stroke:#7466FF,color:#2E2490
+    classDef ai fill:#FFF1E6,stroke:#F55036,color:#7A2410
+    classDef claude fill:#FBEAE3,stroke:#D97757,color:#6B2E18
+    class UI web
+    class API,INV,PL,EVAL,ACT,MCP rust
+    class CAT,DB fdb
+    class GROQ ai
+    class CLAUDE claude
+    style Vercel fill:#FAFAFA,stroke:#111111
+    style Render fill:#F7F6FF,stroke:#7466FF
 ```
 
-The agent, the HTTP API and the MCP server all use the same tool catalog. Claude Desktop calls exactly the tools the agent calls.
+</details>
 
-- **Backend:** Rust (Axum, Tokio, `falkordb` crate). FalkorDB is the only database.
-- **Frontend:** Next.js 16 / React 19, with the agent trace timeline, a live graph canvas and a claim intake form.
+The agent, the HTTP API and the MCP server all use the same tool catalog, so Claude calls exactly the tools the agent calls. In production FalkorDB and the backend share one Render container, with FalkorDB bound to loopback; locally they run as two Docker services.
+
+- **Backend:** Rust 1.99 (Axum 0.8, Tokio 1.53, `falkordb` crate 0.10, reqwest 0.13 with rustls). FalkorDB v4.22.1 is the only database.
+- **Frontend:** Next.js 16.4 / React 19.3, TypeScript 6, Tailwind CSS 4, Bun. Agent trace timeline, live graph canvas, claim intake form.
 - **Planner:** graph-driven rules by default; Claude (Anthropic Messages API tool use) when `ANTHROPIC_API_KEY` is set, otherwise any OpenAI-compatible chat-completions model (Groq by default) when `GROQ_API_KEY` is set. LLM failures fall back to the rules, and detectors the model skipped still run before scoring.
 
 ## Run it locally
