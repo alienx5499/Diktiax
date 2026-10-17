@@ -26,9 +26,9 @@ pub fn create_router(state: AppState) -> Router {
             "/api/claims",
             get(handlers::list_claims).post(handlers::create_claim),
         )
-        .route("/api/claims/:id", get(handlers::get_claim))
-        .route("/api/investigate/:id", post(handlers::investigate))
-        .route("/api/graph/:id", get(handlers::graph))
+        .route("/api/claims/{id}", get(handlers::get_claim))
+        .route("/api/investigate/{id}", post(handlers::investigate))
+        .route("/api/graph/{id}", get(handlers::graph))
         .route("/api/seed", post(handlers::seed))
         .route("/api/mcp/tools", get(handlers::mcp_tools))
         .route("/api/mcp/call", post(handlers::mcp_call))
