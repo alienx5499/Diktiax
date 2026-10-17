@@ -86,6 +86,20 @@ Dashed relationships are written by the agent.
 | `Investigator` | `specialties`, `open_cases` | Seeded SIU staff the agent assigns from |
 | `Investigation` | `decision`, `risk_score`, certificate id | The agent's recorded verdict |
 
+| Relationship | From → To | Meaning |
+|--------------|-----------|---------|
+| `FILED_CLAIM` | `Customer` → `Claim` | Who filed the claim |
+| `TRIGGERED_CLAIM` | `Accident` → `Claim` | The loss behind the claim |
+| `OCCURRED_AT` | `Accident` → `Location` | Where it happened |
+| `INVOLVED_IN` | `Vehicle` → `Accident` | Vehicles in the accident |
+| `OWNS` | `Customer` → `Vehicle` | Vehicle ownership |
+| `HAS_VIN` | `Vehicle` → `VIN` | Two vehicles on one `VIN` = cloning |
+| `HAS_PHONE`, `LIVES_AT` | `Customer` → `Phone` / `Address` | Shared contacts |
+| `REPAIRED_AT`, `TREATED_AT`, `ASSIGNED_TO` | `Claim` → `RepairShop` / `Clinic` / `Adjuster` | Service providers on the claim |
+| `COLLUDES_WITH` | `RepairShop` → `Clinic` | Referral link (`referral_fee_pct`) used by the kickback check |
+| `HAS_INVESTIGATION` | `Claim` → `Investigation` | Written by the agent: the verdict |
+| `ASSIGNED_INVESTIGATOR` | `Claim` → `Investigator` | Written by the agent: who works the case |
+
 Seeded scenarios: a ghost-collision ring (CLM-48291, CLM-39102, CLM-44730), a cloned-VIN pair across CA and NV (CLM-55104, CLM-31205), and three clean controls (CLM-10022, CLM-20417, CLM-20988).
 
 ## The Cypher queries
@@ -215,6 +229,13 @@ cd backend && cargo test --test baseline -- --ignored --nocapture
 
 The graph agent froze 200 of 240 fraud claims and no honest ones; loose rings are a blind spot for freezing and go to audit instead, along with 3.5% of honest claims. An LLM reading a stratified 50-claim sample one claim at a time caught 3 of 24 fraud claims. Each investigation took 17 ms median (p95 23 ms) at this size. The data is generated, so this measures the mechanism on rings built the way the detectors expect, not real-world accuracy.
 
+Reproduce it (about 90 s; needs FalkorDB on `localhost:6379`, uses its own graph):
+
+```bash
+cd backend && cargo test --release --test scale_benchmark -- --ignored --nocapture
+shasum -a 256 ../scripts/scale/answer_key.json   # must match the hash in RESULTS.md
+```
+
 Query latency, from [`scripts/bench_queries.py`](scripts/bench_queries.py): FalkorDB's server-side execution time, 200 runs after 10 warm-ups, FalkorDB v4.22.1 in Docker on a laptop, demo graph (68 nodes):
 
 | Query (on CLM-48291) | Median ms | p95 ms | Max ms |
@@ -293,7 +314,7 @@ The deployed demo is deliberately open: anyone can file and investigate claims o
 
 ## Limitations
 
-- The data is synthetic and small (68 nodes). This shows the approach, not production scale.
+- The data is synthetic: the demo graph has 68 nodes and the scale benchmark uses 5,040 generated claims. That shows the mechanism on rings built the way the detectors expect, not real-world accuracy.
 - Detector severity uses fixed thresholds, not learned weights.
 - The Claude and Groq planners' request handling is unit-tested; live LLM API calls are not part of the automated tests.
 - The ghost-collision window is 90 days, so newly filed claims stop matching the seeded ring once its dates age out.

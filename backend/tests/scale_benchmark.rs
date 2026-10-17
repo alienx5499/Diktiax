@@ -1,5 +1,5 @@
-//! Scale benchmark: 5,000 generated claims with 25 hidden fraud rings, scored by single-claim
-//! rules and by the graph agent. Writes the answer key (and its SHA-256, computed before any
+//! Scale benchmark: 5,040 generated claims (4,800 honest, 25 tight and 5 loose hidden fraud
+//! rings), scored by single-claim rules and by the graph agent. Asserts the headline counts. Writes the answer key (and its SHA-256, computed before any
 //! scoring), a stratified sample for the LLM-only script, and a results table to scripts/scale/.
 //! Requires a running FalkorDB:
 //!   cargo test --release --test scale_benchmark -- --ignored --nocapture
@@ -186,7 +186,7 @@ impl Tally {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "requires a live FalkorDB; generates 5,000 claims (a few minutes)"]
+#[ignore = "requires a live FalkorDB; generates 5,040 claims (about 95 s)"]
 async fn scale_benchmark() {
     std::fs::create_dir_all(OUT).expect("output dir");
     let data = generate();
@@ -243,7 +243,7 @@ async fn scale_benchmark() {
     ms.sort_by(|a, b| a.partial_cmp(b).expect("finite"));
     let pct = |p: f64| ms[((ms.len() as f64 - 1.0) * p) as usize];
 
-    // 5. Stratified sample for the LLM-only script: 10 ring, 10 evasive ring, 30 honest.
+    // 5. Stratified sample for the LLM-only script: 8 ring, 8 evasive, 8 loose ring, 26 honest.
     let mut sample = Vec::new();
     for (group, n) in [
         ("ring", 8),
@@ -267,6 +267,7 @@ async fn scale_benchmark() {
     )
     .expect("write sample");
 
+    let (mut rule_hits, mut agent_hits, mut audit_hits) = (vec![], vec![], vec![]);
     let mut by_group = String::from("| Group | Claims | Single-claim rules flagged | Graph agent flagged (payout frozen) | Graph agent sent to audit |\n|---|---|---|---|---|\n");
     for g in ["ring", "evasive ring", "loose ring", "honest"] {
         let idx: Vec<usize> = (0..data.len()).filter(|&i| data[i].group == g).collect();
@@ -274,6 +275,9 @@ async fn scale_benchmark() {
         let a = idx.iter().filter(|&&i| graph_flags[i]).count();
         let au = idx.iter().filter(|&&i| graph_audit[i]).count();
         by_group.push_str(&format!("| {g} | {} | {r} | {a} | {au} |\n", idx.len()));
+        rule_hits.push(r);
+        agent_hits.push(a);
+        audit_hits.push(au);
     }
     let evasive_total = EVASIVE_RINGS * RING_SIZE;
     let table = format!(
@@ -288,6 +292,28 @@ async fn scale_benchmark() {
          including verdict write-back). Loading {} claims took {load_s:.1} s.\n",
         data.len(), pct(0.5), pct(0.95), pct(1.0), data.len()
     );
-    std::fs::write(format!("{OUT}/RESULTS.md"), &report).expect("write results");
+    // Keep the hand-written sections (LLM-only run, honest reading) that follow the generated part.
+    let path = format!("{OUT}/RESULTS.md");
+    let notes = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|old| old.find("\n## ").map(|i| old[i..].to_string()))
+        .unwrap_or_default();
+    std::fs::write(&path, format!("{report}{notes}")).expect("write results");
     println!("\n{report}");
+
+    // Headline counts (groups: ring, evasive ring, loose ring, honest); checked after the files are written.
+    assert_eq!(data.len(), 5_040, "claims");
+    assert_eq!(rule_hits, vec![120, 0, 0, 2_789], "per-claim rules");
+    assert_eq!(agent_hits, vec![120, 80, 0, 0], "graph agent frozen");
+    assert_eq!(audit_hits, vec![0, 0, 40, 169], "graph agent audit");
+    assert_eq!(
+        (rules.tp, rules.fp, rules.evasive_caught),
+        (120, 2_789, 0),
+        "rules totals"
+    );
+    assert_eq!(
+        (graph_t.tp, graph_t.fp, graph_t.evasive_caught),
+        (200, 0, 80),
+        "graph totals"
+    );
 }

@@ -33,3 +33,5 @@ Graph agent per investigation: median 17.2 ms, p95 23.4 ms, max 34.8 ms (rule-ba
 - Loose rings (shared location and shop only) are a real blind spot for freezing: the graph agent sends them to audit (MEDIUM) but does not freeze them.
 - The audit tier also catches 169 of 4,800 honest claims (3.5%) through coincidental shop/location overlap or shared household addresses.
 - Reproduce: `cd backend && cargo test --release --test scale_benchmark -- --ignored --nocapture`. The answer key and its SHA-256 are in this folder.
+- Verify the key: `shasum -a 256 scripts/scale/answer_key.json` must print the hash at the top of this file.
+- The key is produced by the same seeded generator (SplitMix64, fixed seed) that builds the graph, and it is hashed before any claim is investigated. The hash shows the key wasn't edited after scoring. It can't prove the generator wasn't tuned between runs.

@@ -30,6 +30,6 @@ pub struct InvestigationDossier {
     pub remediation: TriageRemediationResult,
     pub subgraph: SubgraphPayload,
     pub agent_trace: Vec<AgentStep>,
-    /// "claude:<model>" | "rule-based" | "rule-based (fallback: claude:<model> failed: <error>)"
+    /// "claude:<model>" | "rule-based" | "rule-based (fallback: LLM rate-limited | LLM timed out | LLM unavailable)"
     pub planner: String,
 }

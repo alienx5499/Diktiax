@@ -6,13 +6,10 @@ use super::planner::{PlannedCall, Planner, ToolOutcome};
 use super::rule_planner::next_calls;
 use tracing::warn;
 
-/// Longest planner error kept in the dossier label.
-const MAX_ERROR_CHARS: usize = 160;
-
 pub struct FallbackPlanner<P> {
     primary: P,
-    /// (shortened error, history length when the primary failed)
-    failure: Option<(String, usize)>,
+    /// (public failure reason, history length when the primary failed)
+    failure: Option<(&'static str, usize)>,
 }
 
 impl<P> FallbackPlanner<P> {
@@ -23,33 +20,34 @@ impl<P> FallbackPlanner<P> {
         }
     }
 
-    /// `primary` when it never failed, else `rule-based (fallback: <primary> failed: <error>)`.
+    /// `primary` when it never failed, else `rule-based (fallback: <generic reason>)`.
     pub fn label(&self, primary: &str) -> String {
         match &self.failure {
             None => primary.to_string(),
-            Some((error, _)) => {
-                format!("rule-based (fallback: {primary} failed: {})", brief(error))
-            }
+            Some((reason, _)) => format!("rule-based (fallback: {reason})"),
         }
     }
 
     /// Rationale note recording the failure, if any.
     pub fn failure_note(&self, primary: &str) -> Option<String> {
-        self.failure.as_ref().map(|(error, at)| {
+        self.failure.as_ref().map(|(reason, at)| {
             format!(
-                "Planner fallback: {primary} failed after {at} executed step(s) ({error}); \
+                "Planner fallback: {primary} failed after {at} executed step(s) ({reason}); \
                  the rule-based planner continued from the existing history."
             )
         })
     }
 }
 
-/// One line, bounded length. Callers pass errors already scrubbed of secrets.
-fn shorten(error: &str) -> String {
-    let line = error.split_whitespace().collect::<Vec<_>>().join(" ");
-    match line.char_indices().nth(MAX_ERROR_CHARS) {
-        Some((i, _)) => format!("{}...", &line[..i]),
-        None => line,
+/// Generic, public-safe reason for a planner error. Raw provider errors carry response bodies
+/// (org ids, quota details) and must never reach the API; they are only logged server-side.
+fn public_reason(error: &str) -> &'static str {
+    if error.contains("HTTP 429") {
+        "LLM rate-limited"
+    } else if error.contains("timed out") {
+        "LLM timed out"
+    } else {
+        "LLM unavailable"
     }
 }
 
@@ -63,9 +61,8 @@ impl<P: Planner + Send> Planner for FallbackPlanner<P> {
             match self.primary.plan(claim_id, history).await {
                 Ok(calls) => return Ok(calls),
                 Err(e) => {
-                    let error = shorten(&e);
-                    warn!("primary planner failed, falling back to rule-based: {error}");
-                    self.failure = Some((error, history.len()));
+                    warn!("primary planner failed, falling back to rule-based: {e}");
+                    self.failure = Some((public_reason(&e), history.len()));
                 }
             }
         }
@@ -78,15 +75,6 @@ impl<P: Planner + Send> Planner for FallbackPlanner<P> {
 
     fn narrative(&self) -> Option<&str> {
         self.primary.narrative()
-    }
-}
-
-/// First 80 characters of an error, for one-line labels.
-fn brief(error: &str) -> String {
-    const MAX: usize = 80;
-    match error.char_indices().nth(MAX) {
-        Some((cut, _)) => format!("{}…", &error[..cut]),
-        None => error.to_string(),
     }
 }
 
@@ -114,26 +102,57 @@ mod tests {
         assert!(calls[0].rationale.starts_with("[rule-based fallback]"));
         assert_eq!(
             p.label("claude:m"),
-            "rule-based (fallback: claude:m failed: Anthropic API returned HTTP 529: {\"type\":\"overloaded_error\"})"
+            "rule-based (fallback: LLM unavailable)"
         );
         assert!(p.failure_note("claude:m").is_some());
-
-        let long = format!("LLM API returned HTTP 429: {}", "x".repeat(400));
-        assert_eq!(
-            brief(&long).chars().count(),
-            81,
-            "badge label stays one line"
-        );
 
         p.plan("C1", &[]).await.expect("still falls back");
         assert_eq!(p.primary.0, 1, "failed primary is not asked again");
     }
 
+    /// Primary that fails with a fixed error.
+    struct FailsWith(&'static str);
+
+    impl Planner for FailsWith {
+        async fn plan(&mut self, _: &str, _: &[ToolOutcome]) -> Result<Vec<PlannedCall>, String> {
+            Err(self.0.into())
+        }
+    }
+
+    #[tokio::test]
+    async fn rate_limit_body_never_reaches_label_or_rationale() {
+        let groq = r#"LLM API returned HTTP 429: {"error":{"message":"Rate limit reached for model in organization org_abc123 on tokens per day"}}"#;
+        let mut p = FallbackPlanner::new(FailsWith(groq));
+        let calls = p.plan("C1", &[]).await.expect("fallback never errors");
+        let label = p.label("openai:llama");
+        let note = p.failure_note("openai:llama").expect("failure recorded");
+        assert_eq!(label, "rule-based (fallback: LLM rate-limited)");
+        for text in [label.as_str(), note.as_str(), calls[0].rationale.as_str()] {
+            assert!(!text.contains("org_"), "org id leaked: {text}");
+            assert!(!text.contains('{'), "raw body leaked: {text}");
+        }
+    }
+
     #[test]
-    fn healthy_primary_keeps_its_label_and_long_errors_are_cut() {
+    fn errors_map_to_one_generic_reason_per_class() {
+        assert_eq!(
+            public_reason("LLM API returned HTTP 429: {}"),
+            "LLM rate-limited"
+        );
+        assert_eq!(
+            public_reason("LLM API request failed: error sending request: operation timed out"),
+            "LLM timed out"
+        );
+        assert_eq!(
+            public_reason("LLM API returned HTTP 401: invalid api key"),
+            "LLM unavailable"
+        );
+    }
+
+    #[test]
+    fn healthy_primary_keeps_its_label() {
         let p = FallbackPlanner::new(Failing(0));
         assert_eq!(p.label("claude:m"), "claude:m");
         assert!(p.failure_note("claude:m").is_none());
-        assert_eq!(shorten(&"x".repeat(500)).len(), MAX_ERROR_CHARS + 3);
     }
 }
