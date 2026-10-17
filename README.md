@@ -289,6 +289,21 @@ The agent, the HTTP API and the MCP server all use the same tool catalog, so Cla
 - **Frontend:** Next.js 16.4 / React 19.3, TypeScript 6, Tailwind CSS 4, Bun. Agent trace timeline, live graph canvas, claim intake form.
 - **Planner:** graph-driven rules by default; Claude (Anthropic Messages API tool use) when `ANTHROPIC_API_KEY` is set, otherwise any OpenAI-compatible chat-completions model (Groq by default) when `GROQ_API_KEY` is set. LLM failures fall back to the rules, and detectors the model skipped still run before scoring.
 
+## Design decisions
+
+| Decision | Where | Why |
+|---|---|---|
+| **Deterministic core, AI at the edge.** The LLM picks the next tool; it never sets the score | [`domain/evaluator.rs`](backend/src/domain/evaluator.rs), coverage guard in [`agent/investigator.rs`](backend/src/agent/investigator.rs) | A fraud verdict has to be explainable and repeatable. The same evidence always gives the same score |
+| **Inward-only dependencies.** `domain` imports nothing from the crate; `db` depends on `domain`; `tools` and `actions` on `db`; `agent` on those; `api` and `mcp` sit on top | [`backend/src`](backend/src) | The scoring rules can be tested without a database, an LLM or HTTP |
+| **Strategy:** one `Planner` trait, three implementations (rules, Claude, any OpenAI-compatible model) | [`agent/planner.rs`](backend/src/agent/planner.rs) | Adding a planner changes no existing code, and tests swap in fakes |
+| **Decorator:** `FallbackPlanner<P>` wraps any planner and hands over to the rules when the LLM fails, with a generic label | [`agent/fallback_planner.rs`](backend/src/agent/fallback_planner.rs) | Failure handling lives in one place instead of in each planner |
+| **One tool catalog** for the agent, the HTTP API and the MCP server | [`tools/catalog.rs`](backend/src/tools/catalog.rs) | Claude over MCP runs exactly the Cypher the agent runs |
+| **Reads and writes split:** `read_rows` (`GRAPH.RO_QUERY` + timeout) vs `rows` (`GRAPH.QUERY`) | [`db/repository.rs`](backend/src/db/repository.rs) | Evidence gathering can't change the graph it's judging |
+| **Cypher as named constants, values as parameters** | [`db/queries.rs`](backend/src/db/queries.rs) | Queries are reviewable in one file and injection-safe |
+| **An error is not a no:** a failed detector makes the result `INCONCLUSIVE`, never `LOW_RISK` | [`agent/verdict.rs`](backend/src/agent/verdict.rs) | A database hiccup must never clear a claim |
+
+Why there's no repository trait: the agent uses `FalkorGraphRepository` directly. A trait with a single implementation adds indirection with nothing to swap in, and the graph is meant to be load-bearing, not hidden behind an interface.
+
 ## Run it locally
 
 Prerequisites: Docker, Rust (stable), bun.
@@ -313,7 +328,7 @@ cargo test -- --ignored                           # integration tests against li
 
 Everything in containers: `docker compose -f docker-compose.full.yml up --build`, then open http://localhost:3000.
 
-Optional environment (see [`.env.example`](.env.example)): `ANTHROPIC_API_KEY` switches to the Claude planner; without it, `GROQ_API_KEY` enables a free LLM planner on Groq (`GROQ_MODEL` overrides `openai/gpt-oss-120b`, `LLM_BASE_URL` points it at another OpenAI-compatible endpoint such as OpenRouter, Gemini or Ollama); `WEBHOOK_URL` receives escalations, and `FALKORDB_URL` / `FALKORDB_GRAPH` point at another FalkorDB.
+Optional environment (see [`.env.example`](.env.example)): `ANTHROPIC_API_KEY` switches to the Claude planner; without it, `GROQ_API_KEY` enables an LLM planner on Groq (`GROQ_MODEL` overrides `openai/gpt-oss-120b`, `LLM_BASE_URL` points it at another OpenAI-compatible endpoint such as OpenRouter, Gemini or Ollama); `WEBHOOK_URL` receives escalations, and `FALKORDB_URL` / `FALKORDB_GRAPH` point at another FalkorDB.
 
 ## Use it from Claude (MCP)
 
@@ -326,9 +341,9 @@ This exposes the 8 read-only graph tools plus `investigate_claim`, which runs th
 
 ## Deploy
 
-The backend runs on Render's free tier and the frontend on Vercel.
+The backend runs on Render and the frontend on Vercel.
 
-**Render, one container.** [`deploy/render/Dockerfile`](deploy/render/Dockerfile) packs FalkorDB (Redis + module, bound to loopback) and the backend into one image. The graph is in memory and re-seeded on every start, so a sleep or restart always comes back to the complete demo graph. On Render: New Web Service → this repo → Docker, Dockerfile path `deploy/render/Dockerfile`, instance type Free, health check `/api/health`, environment `GROQ_API_KEY`, `GROQ_MODEL`, `ADMIN_TOKEN`. Free services sleep after 15 minutes idle; an uptime pinger on `/api/health` every 10 minutes keeps it awake, and the dashboard waits up to 70 s for a cold start.
+**Render, one container.** [`deploy/render/Dockerfile`](deploy/render/Dockerfile) packs FalkorDB (Redis + module, bound to loopback) and the backend into one image. The graph is in memory and re-seeded on every start, so a restart always comes back to the complete demo graph. On Render: New Web Service → this repo → Docker, Dockerfile path `deploy/render/Dockerfile`, health check `/api/health`, environment `GROQ_API_KEY`, `GROQ_MODEL`, `ADMIN_TOKEN`. An uptime pinger on `/api/health` keeps the service warm.
 
 **Vercel:** project root `frontend/`, install command `bun install`, and `NEXT_PUBLIC_API_BASE=https://<render-domain>` set *before* building (it's inlined at build time).
 
