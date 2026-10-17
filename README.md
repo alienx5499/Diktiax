@@ -12,9 +12,9 @@ Track 01, Agents That Act on Connected Data: FalkorDB "Graph Hacks: Context for 
 
 - **Live demo:** https://diktiax.vercel.app
 - **API:** https://diktiax.onrender.com
-- **Video (4K):** https://youtu.be/hlbGsdvg5xc
+- **Video (4K):** https://youtu.be/9PGixXLjd4k
 
-https://github.com/user-attachments/assets/519e9543-4343-40a9-9755-1f001329adc3
+https://github.com/user-attachments/assets/00bdd135-0537-46dc-9d42-7bb2266bc7f2
 
 ## The problem
 
