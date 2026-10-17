@@ -49,7 +49,7 @@ export function Navbar({
             engineOnline ? 'bg-[#F0C020] text-[#121212]' : 'bg-[#E0E0E0] text-[#121212]'
           }`}>
             <span className={`w-2.5 h-2.5 rounded-full border border-[#121212] ${
-              engineOnline ? 'bg-[#D02020]' : 'bg-[#121212]'
+              engineOnline ? 'bg-[#16A34A] animate-pulse' : 'bg-[#121212]'
             }`} />
             <span>{engineOnline ? 'FalkorDB Active' : 'Backend Offline'}</span>
           </div>
