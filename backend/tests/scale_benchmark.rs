@@ -1,0 +1,293 @@
+//! Scale benchmark: 5,000 generated claims with 25 hidden fraud rings, scored by single-claim
+//! rules and by the graph agent. Writes the answer key (and its SHA-256, computed before any
+//! scoring), a stratified sample for the LLM-only script, and a results table to scripts/scale/.
+//! Requires a running FalkorDB:
+//!   cargo test --release --test scale_benchmark -- --ignored --nocapture
+
+mod common;
+
+use claimgraph_backend::actions::{status_for, ActionDispatcher, Webhook};
+use claimgraph_backend::agent::{ClaimInvestigator, PlannerConfig};
+use claimgraph_backend::db::FalkorGraphRepository;
+use claimgraph_backend::domain::NewClaim;
+use common::TestGraph;
+use serde_json::json;
+use sha2::{Digest, Sha256};
+use std::time::Instant;
+
+const HONEST: usize = 4_800;
+const RINGS: usize = 25;
+const RING_SIZE: usize = 8;
+const EVASIVE_RINGS: usize = 10; // 40%: police reports filed, small amounts
+/// Loose rings share only a crash location and a body shop: no shared phones, clinics or
+/// adjusters, police reports filed. A hard case the detectors are not built to escalate.
+const LOOSE_RINGS: usize = 5;
+const SHOPS: u64 = 300;
+const LOCATIONS: u64 = 400;
+const CLINICS: u64 = 150;
+const ADJUSTERS: u64 = 40;
+const HIGH_AMOUNT: f64 = 25_000.0;
+const OUT: &str = "../scripts/scale";
+
+/// Deterministic generator (SplitMix64) so the dataset is identical on every run.
+struct Rng(u64);
+impl Rng {
+    fn next(&mut self) -> u64 {
+        self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let mut z = self.0;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^ (z >> 31)
+    }
+    fn below(&mut self, n: u64) -> u64 {
+        self.next() % n
+    }
+    fn chance(&mut self, pct: u64) -> bool {
+        self.below(100) < pct
+    }
+}
+
+#[derive(Clone)]
+struct Labelled {
+    claim: NewClaim,
+    fraud: bool,
+    evasive: bool,
+    group: String,
+}
+
+fn generate() -> Vec<Labelled> {
+    let mut rng = Rng(20_261_018);
+    let mut out = Vec::new();
+    // Honest population: unique people, random providers. ~2% are households sharing an address,
+    // and some draw the same shop and location by chance: realistic look-alikes.
+    for i in 0..HONEST {
+        let household = if rng.chance(2) { i / 2 } else { 100_000 + i };
+        out.push(Labelled {
+            claim: NewClaim {
+                claim_id: Some(format!("H-{i:05}")),
+                claimant_name: format!("Honest {i}"),
+                phone: format!("+1-555-1{i:06}"),
+                address: format!("{household} Main St"),
+                vehicle_vin: format!("HVIN{i:07}"),
+                location_id: format!("LOC-{}", rng.below(LOCATIONS)),
+                repair_shop_id: format!("SHOP-{}", rng.below(SHOPS)),
+                clinic_id: rng
+                    .chance(40)
+                    .then(|| format!("MED-{}", rng.below(CLINICS))),
+                adjuster_id: Some(format!("ADJ-{}", rng.below(ADJUSTERS))),
+                amount: 1_500.0 + rng.below(38_000) as f64,
+                police_report: rng.chance(70),
+            },
+            fraud: false,
+            evasive: false,
+            group: "honest".into(),
+        });
+    }
+    // Fraud rings: each reuses one location, shop, clinic and adjuster, and members share phones.
+    for r in 0..RINGS {
+        let evasive = r < EVASIVE_RINGS;
+        let (loc, shop) = (
+            format!("LOC-R{r}-{}", rng.below(LOCATIONS)),
+            format!("SHOP-R{r}"),
+        );
+        let (clinic, adj) = (format!("MED-R{r}"), format!("ADJ-{}", rng.below(ADJUSTERS)));
+        for m in 0..RING_SIZE {
+            out.push(Labelled {
+                claim: NewClaim {
+                    claim_id: Some(format!("R{r:02}-{m}")),
+                    claimant_name: format!("Ring {r} member {m}"),
+                    phone: format!("+1-555-9{r:02}{:02}", m / 3),
+                    address: format!("{} Ring Rd {r}", m % 4),
+                    vehicle_vin: format!("RVIN{r:02}{m:02}"),
+                    location_id: loc.clone(),
+                    repair_shop_id: shop.clone(),
+                    clinic_id: Some(clinic.clone()),
+                    adjuster_id: Some(adj.clone()),
+                    amount: if evasive {
+                        3_000.0 + rng.below(9_000) as f64
+                    } else {
+                        26_000.0 + rng.below(30_000) as f64
+                    },
+                    police_report: evasive,
+                },
+                fraud: true,
+                evasive,
+                group: if evasive { "evasive ring" } else { "ring" }.into(),
+            });
+        }
+    }
+    for r in 0..LOOSE_RINGS {
+        let (loc, shop) = (format!("LOC-L{r}"), format!("SHOP-L{r}"));
+        for m in 0..RING_SIZE {
+            out.push(Labelled {
+                claim: NewClaim {
+                    claim_id: Some(format!("L{r:02}-{m}")),
+                    claimant_name: format!("Loose ring {r} member {m}"),
+                    phone: format!("+1-555-7{r:02}{m:03}"),
+                    address: format!("{m} Loose Ln {r}"),
+                    vehicle_vin: format!("LVIN{r:02}{m:02}"),
+                    location_id: loc.clone(),
+                    repair_shop_id: shop.clone(),
+                    clinic_id: rng
+                        .chance(40)
+                        .then(|| format!("MED-{}", rng.below(CLINICS))),
+                    adjuster_id: Some(format!("ADJ-{}", rng.below(ADJUSTERS))),
+                    amount: 4_000.0 + rng.below(12_000) as f64,
+                    police_report: true,
+                },
+                fraud: true,
+                evasive: false,
+                group: "loose ring".into(),
+            });
+        }
+    }
+    out
+}
+
+fn rules_flag(c: &NewClaim) -> bool {
+    !c.police_report || c.amount >= HIGH_AMOUNT
+}
+
+#[derive(Default)]
+struct Tally {
+    tp: usize,
+    fp: usize,
+    fn_: usize,
+    evasive_caught: usize,
+}
+impl Tally {
+    fn add(&mut self, l: &Labelled, flagged: bool) {
+        match (l.fraud, flagged) {
+            (true, true) => {
+                self.tp += 1;
+                self.evasive_caught += l.evasive as usize;
+            }
+            (false, true) => self.fp += 1,
+            (true, false) => self.fn_ += 1,
+            _ => {}
+        }
+    }
+    fn row(&self, name: &str, evasive_total: usize) -> String {
+        let p = self.tp as f64 / (self.tp + self.fp).max(1) as f64;
+        let r = self.tp as f64 / (self.tp + self.fn_).max(1) as f64;
+        let f1 = if p + r > 0.0 {
+            2.0 * p * r / (p + r)
+        } else {
+            0.0
+        };
+        format!(
+            "| {name} | {} / {} | {}/{evasive_total} | {} | {p:.2} | {r:.2} | {f1:.2} |",
+            self.tp,
+            self.tp + self.fn_,
+            self.evasive_caught,
+            self.fp
+        )
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "requires a live FalkorDB; generates 5,000 claims (a few minutes)"]
+async fn scale_benchmark() {
+    std::fs::create_dir_all(OUT).expect("output dir");
+    let data = generate();
+
+    // 1. Fix the answer key before anything is scored.
+    let key: Vec<_> = data
+        .iter()
+        .map(|l| json!({"claim_id": l.claim.claim_id, "fraud": l.fraud, "evasive": l.evasive}))
+        .collect();
+    let key_json = serde_json::to_string_pretty(&key).expect("key json");
+    let key_hash = hex::encode(Sha256::digest(key_json.as_bytes()));
+    std::fs::write(format!("{OUT}/answer_key.json"), &key_json).expect("write key");
+    std::fs::write(
+        format!("{OUT}/answer_key.sha256"),
+        format!("{key_hash}  answer_key.json\n"),
+    )
+    .expect("write hash");
+
+    // 2. Load into a throwaway graph.
+    let graph = TestGraph::new("claimgraph_scale");
+    let repo = FalkorGraphRepository::connect(&graph.url, &graph.name)
+        .await
+        .expect("FalkorDB running");
+    repo.seed(true).await.expect("seed");
+    let load = Instant::now();
+    for l in &data {
+        repo.ingest_claim(l.claim.clone()).await.expect("ingest");
+    }
+    let load_s = load.elapsed().as_secs_f64();
+
+    // 3. Single-claim rules.
+    let (mut rules, mut graph_t) = (Tally::default(), Tally::default());
+    let rules_flags: Vec<bool> = data.iter().map(|l| rules_flag(&l.claim)).collect();
+    for (l, &f) in data.iter().zip(&rules_flags) {
+        rules.add(l, f);
+    }
+    let mut graph_flags = Vec::with_capacity(data.len());
+    let mut graph_audit = Vec::with_capacity(data.len());
+
+    // 4. Graph agent (rule-based planner) on every claim; verdicts are written back, as in production.
+    let dispatcher = ActionDispatcher::new(repo.clone(), Webhook::new(None).expect("client"));
+    let investigator = ClaimInvestigator::new(repo, dispatcher, PlannerConfig::RuleBased);
+    let mut ms = Vec::with_capacity(data.len());
+    for l in &data {
+        let id = l.claim.claim_id.as_deref().expect("id");
+        let t = Instant::now();
+        let dossier = investigator.investigate(id).await.expect("dossier");
+        ms.push(t.elapsed().as_secs_f64() * 1000.0);
+        let flagged = status_for(&dossier.risk_tier).1;
+        graph_flags.push(flagged);
+        graph_audit.push(dossier.risk_tier == "MEDIUM_RISK");
+        graph_t.add(l, flagged);
+    }
+    ms.sort_by(|a, b| a.partial_cmp(b).expect("finite"));
+    let pct = |p: f64| ms[((ms.len() as f64 - 1.0) * p) as usize];
+
+    // 5. Stratified sample for the LLM-only script: 10 ring, 10 evasive ring, 30 honest.
+    let mut sample = Vec::new();
+    for (group, n) in [
+        ("ring", 8),
+        ("evasive ring", 8),
+        ("loose ring", 8),
+        ("honest", 26),
+    ] {
+        let picks: Vec<_> = data.iter().filter(|l| l.group == group).collect();
+        let step = picks.len() / n;
+        for l in picks.iter().step_by(step).take(n) {
+            let c = &l.claim;
+            sample.push(json!({"group": group, "fraud": l.fraud, "claim": {
+                "claim_id": c.claim_id, "amount_usd": c.amount, "police_report_filed": c.police_report,
+                "location": c.location_id, "repair_shop": c.repair_shop_id,
+                "clinic": c.clinic_id, "adjuster": c.adjuster_id}}));
+        }
+    }
+    std::fs::write(
+        format!("{OUT}/llm_sample.json"),
+        serde_json::to_string_pretty(&sample).expect("sample"),
+    )
+    .expect("write sample");
+
+    let mut by_group = String::from("| Group | Claims | Single-claim rules flagged | Graph agent flagged (payout frozen) | Graph agent sent to audit |\n|---|---|---|---|---|\n");
+    for g in ["ring", "evasive ring", "loose ring", "honest"] {
+        let idx: Vec<usize> = (0..data.len()).filter(|&i| data[i].group == g).collect();
+        let r = idx.iter().filter(|&&i| rules_flags[i]).count();
+        let a = idx.iter().filter(|&&i| graph_flags[i]).count();
+        let au = idx.iter().filter(|&&i| graph_audit[i]).count();
+        by_group.push_str(&format!("| {g} | {} | {r} | {a} | {au} |\n", idx.len()));
+    }
+    let evasive_total = EVASIVE_RINGS * RING_SIZE;
+    let table = format!(
+        "| Method | Fraud caught | Evasive ring members caught | Honest flagged (of {HONEST}) | Precision | Recall | F1 |\n|---|---|---|---|---|---|---|\n{}\n{}",
+        rules.row("Single-claim rules", evasive_total),
+        graph_t.row("Diktiax graph agent", evasive_total)
+    );
+    let report = format!(
+        "# Scale benchmark\n\n{} claims: {HONEST} honest, {RINGS} tight rings x {RING_SIZE} ({EVASIVE_RINGS} evasive), \
+         {LOOSE_RINGS} loose rings x {RING_SIZE}. Answer key SHA-256 (fixed before scoring): `{key_hash}`.\n\n{table}\n\n{by_group}\n\
+         Graph agent per investigation: median {:.1} ms, p95 {:.1} ms, max {:.1} ms (rule-based planner, \
+         including verdict write-back). Loading {} claims took {load_s:.1} s.\n",
+        data.len(), pct(0.5), pct(0.95), pct(1.0), data.len()
+    );
+    std::fs::write(format!("{OUT}/RESULTS.md"), &report).expect("write results");
+    println!("\n{report}");
+}

@@ -101,6 +101,7 @@ RETURN startNode(r) AS src, r AS rel, endNode(r) AS dst
 ```
 
 **Ghost collision ring**: other claims at the same location, repaired at the same shop, within 90 days.
+Path: `Claim ← Accident → Location ← Accident → Claim → RepairShop`, 5 hops. In SQL: claims joined to accidents, locations, accidents again, claims again and shops, a six-table self-join.
 
 ```cypher
 MATCH (c:Claim {id: $claim_id})<-[:TRIGGERED_CLAIM]-(:Accident)-[:OCCURRED_AT]->(loc:Location),
@@ -113,6 +114,7 @@ ORDER BY days_apart, linked_claim_id
 ```
 
 **Shared contact network**: claimants of other claims who share this claimant's phone or address.
+Path: `Claim ← Customer → Phone|Address ← Customer → Claim`, 4 hops. In SQL: the same chain written twice (phones, then addresses) and unioned.
 
 ```cypher
 MATCH (c:Claim {id: $claim_id})<-[:FILED_CLAIM]-(me:Customer)-[link:HAS_PHONE|LIVES_AT]->(contact)
@@ -125,6 +127,7 @@ ORDER BY peer_id, linked_claim_id
 ```
 
 **Cloned VIN**: other vehicle registrations carrying the same VIN that also produced claims.
+Path: `Claim ← Accident ← Vehicle → VIN ← Vehicle → Accident → Claim`, 6 hops. In SQL: a seven-table chain through two vehicle registrations.
 
 ```cypher
 MATCH (c:Claim {id: $claim_id})<-[:TRIGGERED_CLAIM]-(:Accident)<-[:INVOLVED_IN]-(v:Vehicle)-[:HAS_VIN]->(vin:VIN)
@@ -136,6 +139,7 @@ ORDER BY linked_claim_id
 ```
 
 **Kickback triangle**: an unreported accident whose adjuster, shop and clinic recur together on other claims.
+Pattern: one claim and another claim both pointing at the same `RepairShop`, `Clinic` and `Adjuster` (six edges matched at once). In SQL: three provider tables self-joined on two claims, then filtered.
 
 ```cypher
 MATCH (a:Accident)-[:TRIGGERED_CLAIM]->(c:Claim {id: $claim_id}),
@@ -199,6 +203,17 @@ An LLM that also reads one claim at a time does no better. [`scripts/llm_only_ba
 ```bash
 cd backend && cargo test --test baseline -- --ignored --nocapture
 ```
+
+**At scale (5,040 generated claims).** [`backend/tests/scale_benchmark.rs`](backend/tests/scale_benchmark.rs) generates 4,800 honest claims spread over 300 shops, 400 locations, 150 clinics and 40 adjusters (with chance overlaps and shared household addresses), 25 tight fraud rings of 8 (10 of them evasive), and 5 loose rings that share only a crash location and a body shop. The answer key's SHA-256 is written before anything is scored ([results and key](scripts/scale/RESULTS.md)).
+
+| Group | Claims | Single-claim rules flagged | Graph agent froze payout | Graph agent sent to audit |
+|---|---|---|---|---|
+| Tight rings | 120 | 120 | 120 | 0 |
+| Evasive rings | 80 | 0 | 80 | 0 |
+| Loose rings | 40 | 0 | 0 | 40 |
+| Honest | 4,800 | 2,789 | 0 | 169 |
+
+The graph agent froze 200 of 240 fraud claims and no honest ones; loose rings are a blind spot for freezing and go to audit instead, along with 3.5% of honest claims. An LLM reading a stratified 50-claim sample one claim at a time caught 3 of 24 fraud claims. Each investigation took 17 ms median (p95 23 ms) at this size. The data is generated, so this measures the mechanism on rings built the way the detectors expect, not real-world accuracy.
 
 Query latency, from [`scripts/bench_queries.py`](scripts/bench_queries.py): FalkorDB's server-side execution time, 200 runs after 10 warm-ups, FalkorDB v4.22.1 in Docker on a laptop, demo graph (68 nodes):
 

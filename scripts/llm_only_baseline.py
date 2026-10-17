@@ -7,6 +7,9 @@ backend/tests/baseline.rs (seeded claims from data/seed.cypher plus the construc
 the labels were fixed by construction before anything ran.
 
     GROQ_API_KEY=... python3 scripts/llm_only_baseline.py [runs]
+    GROQ_API_KEY=... python3 scripts/llm_only_baseline.py 1 scripts/scale/llm_sample.json
+
+The second form scores the stratified 50-claim sample exported by backend/tests/scale_benchmark.rs.
 
 Uses Groq's OpenAI-compatible API with openai/gpt-oss-120b at temperature 0.
 """
@@ -20,6 +23,7 @@ import urllib.request
 MODEL = os.environ.get("GROQ_MODEL", "openai/gpt-oss-120b")
 URL = "https://api.groq.com/openai/v1/chat/completions"
 RUNS = int(sys.argv[1]) if len(sys.argv) > 1 else 3
+SAMPLE = sys.argv[2] if len(sys.argv) > 2 else None
 
 # (group, is_fraud, claim record as the reviewer sees it)
 CLAIMS = [
@@ -37,6 +41,9 @@ CLAIMS = [
     ("Honest claims with red flags", False, {"claim_id": "NEW-4", "amount_usd": 31000, "police_report_filed": False, "location": "LOC-900", "repair_shop": "SHOP-900"}),
     ("Honest claims with red flags", False, {"claim_id": "NEW-5", "amount_usd": 27500, "police_report_filed": True, "location": "LOC-901", "repair_shop": "SHOP-901"}),
 ]
+
+if SAMPLE:
+    CLAIMS = [(c["group"], c["fraud"], c["claim"]) for c in json.load(open(SAMPLE))]
 
 SYSTEM = (
     "You are an insurance fraud reviewer. You see ONE claim file at a time and nothing else. "

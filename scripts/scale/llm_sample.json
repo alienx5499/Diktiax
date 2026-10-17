@@ -1,0 +1,652 @@
+[
+  {
+    "claim": {
+      "adjuster": "ADJ-20",
+      "amount_usd": 40268.0,
+      "claim_id": "R10-0",
+      "clinic": "MED-R10",
+      "location": "LOC-R10-332",
+      "police_report_filed": false,
+      "repair_shop": "SHOP-R10"
+    },
+    "fraud": true,
+    "group": "ring"
+  },
+  {
+    "claim": {
+      "adjuster": "ADJ-8",
+      "amount_usd": 37670.0,
+      "claim_id": "R11-7",
+      "clinic": "MED-R11",
+      "location": "LOC-R11-88",
+      "police_report_filed": false,
+      "repair_shop": "SHOP-R11"
+    },
+    "fraud": true,
+    "group": "ring"
+  },
+  {
+    "claim": {
+      "adjuster": "ADJ-25",
+      "amount_usd": 34773.0,
+      "claim_id": "R13-6",
+      "clinic": "MED-R13",
+      "location": "LOC-R13-316",
+      "police_report_filed": false,
+      "repair_shop": "SHOP-R13"
+    },
+    "fraud": true,
+    "group": "ring"
+  },
+  {
+    "claim": {
+      "adjuster": "ADJ-25",
+      "amount_usd": 48574.0,
+      "claim_id": "R15-5",
+      "clinic": "MED-R15",
+      "location": "LOC-R15-277",
+      "police_report_filed": false,
+      "repair_shop": "SHOP-R15"
+    },
+    "fraud": true,
+    "group": "ring"
+  },
+  {
+    "claim": {
+      "adjuster": "ADJ-28",
+      "amount_usd": 40753.0,
+      "claim_id": "R17-4",
+      "clinic": "MED-R17",
+      "location": "LOC-R17-56",
+      "police_report_filed": false,
+      "repair_shop": "SHOP-R17"
+    },
+    "fraud": true,
+    "group": "ring"
+  },
+  {
+    "claim": {
+      "adjuster": "ADJ-35",
+      "amount_usd": 30268.0,
+      "claim_id": "R19-3",
+      "clinic": "MED-R19",
+      "location": "LOC-R19-325",
+      "police_report_filed": false,
+      "repair_shop": "SHOP-R19"
+    },
+    "fraud": true,
+    "group": "ring"
+  },
+  {
+    "claim": {
+      "adjuster": "ADJ-3",
+      "amount_usd": 55168.0,
+      "claim_id": "R21-2",
+      "clinic": "MED-R21",
+      "location": "LOC-R21-340",
+      "police_report_filed": false,
+      "repair_shop": "SHOP-R21"
+    },
+    "fraud": true,
+    "group": "ring"
+  },
+  {
+    "claim": {
+      "adjuster": "ADJ-21",
+      "amount_usd": 49248.0,
+      "claim_id": "R23-1",
+      "clinic": "MED-R23",
+      "location": "LOC-R23-265",
+      "police_report_filed": false,
+      "repair_shop": "SHOP-R23"
+    },
+    "fraud": true,
+    "group": "ring"
+  },
+  {
+    "claim": {
+      "adjuster": "ADJ-5",
+      "amount_usd": 10245.0,
+      "claim_id": "R00-0",
+      "clinic": "MED-R0",
+      "location": "LOC-R0-206",
+      "police_report_filed": true,
+      "repair_shop": "SHOP-R0"
+    },
+    "fraud": true,
+    "group": "evasive ring"
+  },
+  {
+    "claim": {
+      "adjuster": "ADJ-0",
+      "amount_usd": 5411.0,
+      "claim_id": "R01-2",
+      "clinic": "MED-R1",
+      "location": "LOC-R1-399",
+      "police_report_filed": true,
+      "repair_shop": "SHOP-R1"
+    },
+    "fraud": true,
+    "group": "evasive ring"
+  },
+  {
+    "claim": {
+      "adjuster": "ADJ-2",
+      "amount_usd": 10366.0,
+      "claim_id": "R02-4",
+      "clinic": "MED-R2",
+      "location": "LOC-R2-317",
+      "police_report_filed": true,
+      "repair_shop": "SHOP-R2"
+    },
+    "fraud": true,
+    "group": "evasive ring"
+  },
+  {
+    "claim": {
+      "adjuster": "ADJ-13",
+      "amount_usd": 11562.0,
+      "claim_id": "R03-6",
+      "clinic": "MED-R3",
+      "location": "LOC-R3-247",
+      "police_report_filed": true,
+      "repair_shop": "SHOP-R3"
+    },
+    "fraud": true,
+    "group": "evasive ring"
+  },
+  {
+    "claim": {
+      "adjuster": "ADJ-9",
+      "amount_usd": 8726.0,
+      "claim_id": "R05-0",
+      "clinic": "MED-R5",
+      "location": "LOC-R5-122",
+      "police_report_filed": true,
+      "repair_shop": "SHOP-R5"
+    },
+    "fraud": true,
+    "group": "evasive ring"
+  },
+  {
+    "claim": {
+      "adjuster": "ADJ-8",
+      "amount_usd": 4579.0,
+      "claim_id": "R06-2",
+      "clinic": "MED-R6",
+      "location": "LOC-R6-0",
+      "police_report_filed": true,
+      "repair_shop": "SHOP-R6"
+    },
+    "fraud": true,
+    "group": "evasive ring"
+  },
+  {
+    "claim": {
+      "adjuster": "ADJ-14",
+      "amount_usd": 9562.0,
+      "claim_id": "R07-4",
+      "clinic": "MED-R7",
+      "location": "LOC-R7-215",
+      "police_report_filed": true,
+      "repair_shop": "SHOP-R7"
+    },
+    "fraud": true,
+    "group": "evasive ring"
+  },
+  {
+    "claim": {
+      "adjuster": "ADJ-1",
+      "amount_usd": 7672.0,
+      "claim_id": "R08-6",
+      "clinic": "MED-R8",
+      "location": "LOC-R8-101",
+      "police_report_filed": true,
+      "repair_shop": "SHOP-R8"
+    },
+    "fraud": true,
+    "group": "evasive ring"
+  },
+  {
+    "claim": {
+      "adjuster": "ADJ-21",
+      "amount_usd": 4272.0,
+      "claim_id": "L00-0",
+      "clinic": null,
+      "location": "LOC-L0",
+      "police_report_filed": true,
+      "repair_shop": "SHOP-L0"
+    },
+    "fraud": true,
+    "group": "loose ring"
+  },
+  {
+    "claim": {
+      "adjuster": "ADJ-28",
+      "amount_usd": 10322.0,
+      "claim_id": "L00-5",
+      "clinic": "MED-2",
+      "location": "LOC-L0",
+      "police_report_filed": true,
+      "repair_shop": "SHOP-L0"
+    },
+    "fraud": true,
+    "group": "loose ring"
+  },
+  {
+    "claim": {
+      "adjuster": "ADJ-19",
+      "amount_usd": 8252.0,
+      "claim_id": "L01-2",
+      "clinic": null,
+      "location": "LOC-L1",
+      "police_report_filed": true,
+      "repair_shop": "SHOP-L1"
+    },
+    "fraud": true,
+    "group": "loose ring"
+  },
+  {
+    "claim": {
+      "adjuster": "ADJ-27",
+      "amount_usd": 4249.0,
+      "claim_id": "L01-7",
+      "clinic": null,
+      "location": "LOC-L1",
+      "police_report_filed": true,
+      "repair_shop": "SHOP-L1"
+    },
+    "fraud": true,
+    "group": "loose ring"
+  },
+  {
+    "claim": {
+      "adjuster": "ADJ-8",
+      "amount_usd": 4200.0,
+      "claim_id": "L02-4",
+      "clinic": null,
+      "location": "LOC-L2",
+      "police_report_filed": true,
+      "repair_shop": "SHOP-L2"
+    },
+    "fraud": true,
+    "group": "loose ring"
+  },
+  {
+    "claim": {
+      "adjuster": "ADJ-20",
+      "amount_usd": 15312.0,
+      "claim_id": "L03-1",
+      "clinic": null,
+      "location": "LOC-L3",
+      "police_report_filed": true,
+      "repair_shop": "SHOP-L3"
+    },
+    "fraud": true,
+    "group": "loose ring"
+  },
+  {
+    "claim": {
+      "adjuster": "ADJ-22",
+      "amount_usd": 5294.0,
+      "claim_id": "L03-6",
+      "clinic": "MED-79",
+      "location": "LOC-L3",
+      "police_report_filed": true,
+      "repair_shop": "SHOP-L3"
+    },
+    "fraud": true,
+    "group": "loose ring"
+  },
+  {
+    "claim": {
+      "adjuster": "ADJ-35",
+      "amount_usd": 11177.0,
+      "claim_id": "L04-3",
+      "clinic": null,
+      "location": "LOC-L4",
+      "police_report_filed": true,
+      "repair_shop": "SHOP-L4"
+    },
+    "fraud": true,
+    "group": "loose ring"
+  },
+  {
+    "claim": {
+      "adjuster": "ADJ-33",
+      "amount_usd": 2767.0,
+      "claim_id": "H-00000",
+      "clinic": "MED-79",
+      "location": "LOC-47",
+      "police_report_filed": true,
+      "repair_shop": "SHOP-69"
+    },
+    "fraud": false,
+    "group": "honest"
+  },
+  {
+    "claim": {
+      "adjuster": "ADJ-5",
+      "amount_usd": 17043.0,
+      "claim_id": "H-00184",
+      "clinic": "MED-75",
+      "location": "LOC-367",
+      "police_report_filed": true,
+      "repair_shop": "SHOP-3"
+    },
+    "fraud": false,
+    "group": "honest"
+  },
+  {
+    "claim": {
+      "adjuster": "ADJ-30",
+      "amount_usd": 28787.0,
+      "claim_id": "H-00368",
+      "clinic": null,
+      "location": "LOC-348",
+      "police_report_filed": false,
+      "repair_shop": "SHOP-104"
+    },
+    "fraud": false,
+    "group": "honest"
+  },
+  {
+    "claim": {
+      "adjuster": "ADJ-38",
+      "amount_usd": 17332.0,
+      "claim_id": "H-00552",
+      "clinic": "MED-121",
+      "location": "LOC-224",
+      "police_report_filed": true,
+      "repair_shop": "SHOP-84"
+    },
+    "fraud": false,
+    "group": "honest"
+  },
+  {
+    "claim": {
+      "adjuster": "ADJ-27",
+      "amount_usd": 33193.0,
+      "claim_id": "H-00736",
+      "clinic": "MED-111",
+      "location": "LOC-109",
+      "police_report_filed": true,
+      "repair_shop": "SHOP-8"
+    },
+    "fraud": false,
+    "group": "honest"
+  },
+  {
+    "claim": {
+      "adjuster": "ADJ-5",
+      "amount_usd": 15870.0,
+      "claim_id": "H-00920",
+      "clinic": "MED-142",
+      "location": "LOC-374",
+      "police_report_filed": false,
+      "repair_shop": "SHOP-202"
+    },
+    "fraud": false,
+    "group": "honest"
+  },
+  {
+    "claim": {
+      "adjuster": "ADJ-24",
+      "amount_usd": 35354.0,
+      "claim_id": "H-01104",
+      "clinic": "MED-124",
+      "location": "LOC-30",
+      "police_report_filed": true,
+      "repair_shop": "SHOP-85"
+    },
+    "fraud": false,
+    "group": "honest"
+  },
+  {
+    "claim": {
+      "adjuster": "ADJ-38",
+      "amount_usd": 29214.0,
+      "claim_id": "H-01288",
+      "clinic": null,
+      "location": "LOC-20",
+      "police_report_filed": true,
+      "repair_shop": "SHOP-141"
+    },
+    "fraud": false,
+    "group": "honest"
+  },
+  {
+    "claim": {
+      "adjuster": "ADJ-29",
+      "amount_usd": 16800.0,
+      "claim_id": "H-01472",
+      "clinic": "MED-140",
+      "location": "LOC-292",
+      "police_report_filed": true,
+      "repair_shop": "SHOP-53"
+    },
+    "fraud": false,
+    "group": "honest"
+  },
+  {
+    "claim": {
+      "adjuster": "ADJ-29",
+      "amount_usd": 34805.0,
+      "claim_id": "H-01656",
+      "clinic": null,
+      "location": "LOC-2",
+      "police_report_filed": true,
+      "repair_shop": "SHOP-94"
+    },
+    "fraud": false,
+    "group": "honest"
+  },
+  {
+    "claim": {
+      "adjuster": "ADJ-2",
+      "amount_usd": 12967.0,
+      "claim_id": "H-01840",
+      "clinic": null,
+      "location": "LOC-223",
+      "police_report_filed": true,
+      "repair_shop": "SHOP-42"
+    },
+    "fraud": false,
+    "group": "honest"
+  },
+  {
+    "claim": {
+      "adjuster": "ADJ-22",
+      "amount_usd": 30865.0,
+      "claim_id": "H-02024",
+      "clinic": null,
+      "location": "LOC-392",
+      "police_report_filed": true,
+      "repair_shop": "SHOP-139"
+    },
+    "fraud": false,
+    "group": "honest"
+  },
+  {
+    "claim": {
+      "adjuster": "ADJ-15",
+      "amount_usd": 25765.0,
+      "claim_id": "H-02208",
+      "clinic": "MED-114",
+      "location": "LOC-390",
+      "police_report_filed": true,
+      "repair_shop": "SHOP-182"
+    },
+    "fraud": false,
+    "group": "honest"
+  },
+  {
+    "claim": {
+      "adjuster": "ADJ-13",
+      "amount_usd": 31062.0,
+      "claim_id": "H-02392",
+      "clinic": "MED-80",
+      "location": "LOC-66",
+      "police_report_filed": true,
+      "repair_shop": "SHOP-107"
+    },
+    "fraud": false,
+    "group": "honest"
+  },
+  {
+    "claim": {
+      "adjuster": "ADJ-29",
+      "amount_usd": 7461.0,
+      "claim_id": "H-02576",
+      "clinic": null,
+      "location": "LOC-206",
+      "police_report_filed": true,
+      "repair_shop": "SHOP-4"
+    },
+    "fraud": false,
+    "group": "honest"
+  },
+  {
+    "claim": {
+      "adjuster": "ADJ-32",
+      "amount_usd": 8992.0,
+      "claim_id": "H-02760",
+      "clinic": null,
+      "location": "LOC-174",
+      "police_report_filed": true,
+      "repair_shop": "SHOP-253"
+    },
+    "fraud": false,
+    "group": "honest"
+  },
+  {
+    "claim": {
+      "adjuster": "ADJ-29",
+      "amount_usd": 7930.0,
+      "claim_id": "H-02944",
+      "clinic": null,
+      "location": "LOC-201",
+      "police_report_filed": true,
+      "repair_shop": "SHOP-118"
+    },
+    "fraud": false,
+    "group": "honest"
+  },
+  {
+    "claim": {
+      "adjuster": "ADJ-39",
+      "amount_usd": 32339.0,
+      "claim_id": "H-03128",
+      "clinic": null,
+      "location": "LOC-166",
+      "police_report_filed": false,
+      "repair_shop": "SHOP-278"
+    },
+    "fraud": false,
+    "group": "honest"
+  },
+  {
+    "claim": {
+      "adjuster": "ADJ-8",
+      "amount_usd": 25660.0,
+      "claim_id": "H-03312",
+      "clinic": null,
+      "location": "LOC-123",
+      "police_report_filed": true,
+      "repair_shop": "SHOP-29"
+    },
+    "fraud": false,
+    "group": "honest"
+  },
+  {
+    "claim": {
+      "adjuster": "ADJ-6",
+      "amount_usd": 2447.0,
+      "claim_id": "H-03496",
+      "clinic": "MED-87",
+      "location": "LOC-363",
+      "police_report_filed": false,
+      "repair_shop": "SHOP-130"
+    },
+    "fraud": false,
+    "group": "honest"
+  },
+  {
+    "claim": {
+      "adjuster": "ADJ-39",
+      "amount_usd": 5414.0,
+      "claim_id": "H-03680",
+      "clinic": "MED-26",
+      "location": "LOC-39",
+      "police_report_filed": true,
+      "repair_shop": "SHOP-226"
+    },
+    "fraud": false,
+    "group": "honest"
+  },
+  {
+    "claim": {
+      "adjuster": "ADJ-20",
+      "amount_usd": 3913.0,
+      "claim_id": "H-03864",
+      "clinic": null,
+      "location": "LOC-133",
+      "police_report_filed": true,
+      "repair_shop": "SHOP-147"
+    },
+    "fraud": false,
+    "group": "honest"
+  },
+  {
+    "claim": {
+      "adjuster": "ADJ-16",
+      "amount_usd": 2032.0,
+      "claim_id": "H-04048",
+      "clinic": "MED-49",
+      "location": "LOC-382",
+      "police_report_filed": true,
+      "repair_shop": "SHOP-167"
+    },
+    "fraud": false,
+    "group": "honest"
+  },
+  {
+    "claim": {
+      "adjuster": "ADJ-19",
+      "amount_usd": 28810.0,
+      "claim_id": "H-04232",
+      "clinic": "MED-50",
+      "location": "LOC-142",
+      "police_report_filed": true,
+      "repair_shop": "SHOP-48"
+    },
+    "fraud": false,
+    "group": "honest"
+  },
+  {
+    "claim": {
+      "adjuster": "ADJ-39",
+      "amount_usd": 18777.0,
+      "claim_id": "H-04416",
+      "clinic": null,
+      "location": "LOC-22",
+      "police_report_filed": true,
+      "repair_shop": "SHOP-113"
+    },
+    "fraud": false,
+    "group": "honest"
+  },
+  {
+    "claim": {
+      "adjuster": "ADJ-22",
+      "amount_usd": 25058.0,
+      "claim_id": "H-04600",
+      "clinic": null,
+      "location": "LOC-340",
+      "police_report_filed": true,
+      "repair_shop": "SHOP-72"
+    },
+    "fraud": false,
+    "group": "honest"
+  }
+]
