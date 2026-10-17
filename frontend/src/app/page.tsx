@@ -1,15 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import {
-  ClaimSummary,
-  InvestigationDossier,
-  fetchClaims,
-  investigateClaim,
-  seedDatabase,
-  checkBackendHealth,
-  ApiError,
-} from '@/lib/api';
+import { ClaimSummary, InvestigationDossier, fetchClaims, investigateClaim, seedDatabase, checkBackendHealth, ApiError } from '@/lib/api';
 
 import { Navbar } from '@/components/Navbar';
 import { GraphCanvas } from '@/components/GraphCanvas';
@@ -18,6 +10,7 @@ import { PatternFilter } from '@/components/PatternFilter';
 import { AgentTrace } from '@/components/AgentTrace';
 import { NewClaimForm } from '@/components/NewClaimForm';
 import { ErrorPanel } from '@/components/ErrorPanel';
+import { BootLoader } from '@/components/BootLoader';
 import { Footer } from '@/components/Footer';
 
 const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e));
@@ -33,6 +26,8 @@ export default function Home() {
   const [engineOnline, setEngineOnline] = useState<boolean>(false);
   const [seedEnabled, setSeedEnabled] = useState<boolean>(false);
   const [activePattern, setActivePattern] = useState<string | null>(null);
+  // True until the first claims request settles: covers a cold-starting backend.
+  const [booting, setBooting] = useState<boolean>(true);
 
   const evidenceIds = useMemo(() => {
     const patterns = dossier?.patterns_matched ?? [];
@@ -71,16 +66,18 @@ export default function Home() {
 
   useEffect(() => {
     checkBackendHealth().then((h) => setSeedEnabled(h.seedEnabled));
-    fetchClaims().then(
-      (list) => {
-        setClaims(list);
-        setEngineOnline(true);
-      },
-      (err) => {
-        setEngineOnline(false);
-        setClaimsError(errMsg(err));
-      },
-    );
+    fetchClaims()
+      .then(
+        (list) => {
+          setClaims(list);
+          setEngineOnline(true);
+        },
+        (err) => {
+          setEngineOnline(false);
+          setClaimsError(errMsg(err));
+        },
+      )
+      .finally(() => setBooting(false));
   }, []);
 
   const handleReseed = async () => {
@@ -107,15 +104,10 @@ export default function Home() {
 
   return (
     <div className="min-h-screen w-full bg-[#F0F0F0] text-[#121212] font-sans flex flex-col antialiased">
-      <Navbar
-        engineOnline={engineOnline}
-        onReseed={handleReseed}
-        isReseeding={isReseeding}
-        seedEnabled={seedEnabled}
-      />
+      {booting && <BootLoader />}
+      <Navbar engineOnline={engineOnline} onReseed={handleReseed} isReseeding={isReseeding} seedEnabled={seedEnabled} />
 
       <main className="flex-1 w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-10">
-        
         {/* Bauhaus Constructivist Page Header */}
         <div className="space-y-4">
           <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-6 pb-2">
@@ -134,9 +126,7 @@ export default function Home() {
 
             {/* Target Claim Selector Tabs */}
             <div className="space-y-1.5 self-start lg:self-auto">
-              <span className="text-[11px] font-bold uppercase tracking-widest text-[#121212]/70 block">
-                Select Forensic Target
-              </span>
+              <span className="text-[11px] font-bold uppercase tracking-widest text-[#121212]/70 block">Select Forensic Target</span>
               <div className="flex items-center gap-2 overflow-x-auto pb-1">
                 {claims.length === 0 && !claimsError && (
                   <span className="font-mono text-xs font-bold uppercase text-[#121212]/70">No claims yet. Submit one below.</span>
@@ -169,9 +159,7 @@ export default function Home() {
           </div>
         </div>
 
-        {claimsError && (
-          <ErrorPanel title="Backend unavailable: cannot load claims" message={claimsError} onRetry={() => loadClaims()} />
-        )}
+        {claimsError && <ErrorPanel title="Backend unavailable: cannot load claims" message={claimsError} onRetry={() => loadClaims()} />}
 
         {investigateError && selectedClaimId && (
           <ErrorPanel
@@ -193,14 +181,19 @@ export default function Home() {
                 evidenceIds={evidenceIds}
               />
             ) : (
-              <div role="status" className="h-[540px] w-full bg-white border-2 lg:border-4 border-[#121212] shadow-[6px_6px_0px_0px_#121212] rounded-none flex items-center justify-center font-mono font-bold uppercase text-xs text-[#121212]">
+              <div
+                role="status"
+                className="h-[540px] w-full bg-white border-2 lg:border-4 border-[#121212] shadow-[6px_6px_0px_0px_#121212] rounded-none flex items-center justify-center font-mono font-bold uppercase text-xs text-[#121212]"
+              >
                 Agent investigating graph...
               </div>
             )}
           </section>
         )}
 
-        {dossier && <AgentTrace trace={dossier.agent_trace} planner={dossier.planner} evidence={dossier.certificate.topological_evidence} />}
+        {dossier && (
+          <AgentTrace trace={dossier.agent_trace} planner={dossier.planner} evidence={dossier.certificate.topological_evidence} />
+        )}
 
         {/* Step 01 Evidence & Step 02 Enforcement */}
         {dossier && selectedClaimId && (
