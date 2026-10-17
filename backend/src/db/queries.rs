@@ -44,7 +44,8 @@ pub const MIN_DEPTH: u8 = 1;
 pub const MAX_DEPTH: u8 = 4;
 
 /// Variable-length neighbourhood of a claim. `depth` is clamped to `MIN_DEPTH..=MAX_DEPTH`
-/// before being formatted into the path bound (Cypher cannot parameterise path lengths).
+/// before being formatted into the path bound: FalkorDB rejects a parameter there (`[*1..$depth]`
+/// fails with "unhandled type in inlined properties" on v4.22.1, FalkorDB/FalkorDB#3350).
 pub fn claim_subgraph(depth: u8) -> String {
     let depth = depth.clamp(MIN_DEPTH, MAX_DEPTH);
     format!(

@@ -9,11 +9,16 @@ pub struct TestGraph {
 
 impl TestGraph {
     /// Base name comes from `FALKORDB_GRAPH` (else `default_base`) plus a per-run unique suffix.
+    #[allow(dead_code)] // scale_benchmark uses `named` only
     pub fn new(default_base: &str) -> Self {
+        let base = std::env::var("FALKORDB_GRAPH").unwrap_or_else(|_| default_base.into());
+        Self::named(format!("{base}_{}", uuid::Uuid::new_v4().simple()))
+    }
+
+    /// Exact graph name, still deleted on drop.
+    pub fn named(name: String) -> Self {
         let url =
             std::env::var("FALKORDB_URL").unwrap_or_else(|_| "falkor://127.0.0.1:6379".into());
-        let base = std::env::var("FALKORDB_GRAPH").unwrap_or_else(|_| default_base.into());
-        let name = format!("{base}_{}", uuid::Uuid::new_v4().simple());
         Self { url, name }
     }
 }

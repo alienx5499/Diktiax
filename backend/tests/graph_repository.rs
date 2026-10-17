@@ -7,6 +7,9 @@ mod common;
 use claimgraph_backend::db::FalkorGraphRepository;
 use claimgraph_backend::domain::NewClaim;
 use common::TestGraph;
+use falkordb::{FalkorClientBuilder, FalkorConnectionInfo, FalkorValue};
+use futures_core::Stream;
+use std::pin::Pin;
 
 const RING_PHONE: &str = "+1-555-019-8821"; // shared by CUST-1001 / CUST-1002
 const RING_LOCATION: &str = "LOC-441";
@@ -216,6 +219,94 @@ async fn graph_repository_end_to_end() {
         repo.ingest_claim(dup).await.is_err(),
         "duplicate claim id rejected"
     );
+}
+
+/// Single integer from a read-only query, through a client separate from the repository.
+async fn count(graph: &TestGraph, query: &str) -> i64 {
+    let info: FalkorConnectionInfo = graph.url.as_str().try_into().expect("url");
+    let client = FalkorClientBuilder::new_async()
+        .with_connection_info(info)
+        .build()
+        .await
+        .expect("client");
+    let mut res = client
+        .select_graph(&graph.name)
+        .ro_query(query)
+        .execute()
+        .await
+        .expect("count");
+    let row = std::future::poll_fn(|cx| Pin::new(&mut res.data).poll_next(cx))
+        .await
+        .expect("row")
+        .expect("parse");
+    match row.get_at(0) {
+        Some(&FalkorValue::I64(n)) => n,
+        other => panic!("unexpected count {other:?} for {query}"),
+    }
+}
+
+/// (nodes, relationships), independent of `SeedReport`.
+async fn graph_counts(graph: &TestGraph) -> (i64, i64) {
+    (
+        count(graph, "MATCH (n) RETURN count(n)").await,
+        count(graph, "MATCH ()-[r]->() RETURN count(r)").await,
+    )
+}
+
+/// Reset-and-reseed yields the same graph: the seed is one CREATE after deleting the graph,
+/// so this proves determinism, not MERGE-style idempotence.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "requires a live FalkorDB (docker compose up -d falkordb)"]
+async fn reseed_is_deterministic() {
+    let (repo, graph) = repo().await;
+    repo.seed(true).await.expect("seed");
+    let first = graph_counts(&graph).await;
+    repo.seed(true).await.expect("reseed");
+    let second = graph_counts(&graph).await;
+    assert_eq!(first, second, "reseeding must not change the graph");
+    assert_eq!(first, (68, 84), "README: 68 nodes, 84 relationships");
+    // graph is deleted when `graph` drops
+}
+
+/// Ingest MERGEs contact nodes: two new customers sharing a phone and address share one node each.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "requires a live FalkorDB (docker compose up -d falkordb)"]
+async fn ingest_merges_shared_contacts() {
+    const PHONE: &str = "+1-555-777-0142"; // not in data/seed.cypher
+    const ADDRESS: &str = "77 Shared Lane, Fremont, CA";
+    let (repo, graph) = repo().await;
+    repo.seed(true).await.expect("seed");
+    let claim = |name: &str, vin: &str| NewClaim {
+        claimant_name: name.into(),
+        phone: PHONE.into(),
+        address: ADDRESS.into(),
+        vehicle_vin: vin.into(),
+        ..new_claim()
+    };
+    repo.ingest_claim(claim("First Sharer", "2C3CDXCT0EH000011"))
+        .await
+        .expect("ingest 1");
+    repo.ingest_claim(claim("Second Sharer", "2C3CDXCT0EH000012"))
+        .await
+        .expect("ingest 2");
+
+    let phones = format!("MATCH (p:Phone {{number: '{PHONE}'}}) RETURN count(p)");
+    let addrs = format!("MATCH (a:Address {{line: '{ADDRESS}'}}) RETURN count(a)");
+    let phone_edges =
+        format!("MATCH (:Customer)-[r:HAS_PHONE]->(:Phone {{number: '{PHONE}'}}) RETURN count(r)");
+    let addr_edges =
+        format!("MATCH (:Customer)-[r:LIVES_AT]->(:Address {{line: '{ADDRESS}'}}) RETURN count(r)");
+    assert_eq!(count(&graph, &phones).await, 1, "one Phone node");
+    assert_eq!(count(&graph, &addrs).await, 1, "one Address node");
+    assert_eq!(count(&graph, &phone_edges).await, 2, "2 HAS_PHONE edges");
+    assert_eq!(count(&graph, &addr_edges).await, 2, "2 LIVES_AT edges");
+
+    // A third claim reusing the phone still lands on the same node.
+    repo.ingest_claim(claim("First Sharer", "2C3CDXCT0EH000011"))
+        .await
+        .expect("ingest 3");
+    assert_eq!(count(&graph, &phones).await, 1, "Phone still merged");
+    assert_eq!(count(&graph, &phone_edges).await, 3);
 }
 
 fn new_claim() -> NewClaim {

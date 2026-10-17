@@ -205,8 +205,9 @@ async fn scale_benchmark() {
     )
     .expect("write hash");
 
-    // 2. Load into a throwaway graph.
-    let graph = TestGraph::new("claimgraph_scale");
+    // 2. Load into a throwaway graph (seed(true) drops any leftover one; deleted on drop).
+    // Named after the answer-key hash: the graph is identified by the data it was built from.
+    let graph = TestGraph::named(format!("scale_{}", &key_hash[..8]));
     let repo = FalkorGraphRepository::connect(&graph.url, &graph.name)
         .await
         .expect("FalkorDB running");

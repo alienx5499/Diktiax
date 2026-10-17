@@ -33,7 +33,7 @@ impl FalkorGraphRepository {
     ) -> Result<Option<Investigator>, String> {
         let patterns = FalkorValue::Array(pattern_names.iter().map(|p| text(p)).collect());
         let rows = self
-            .rows(queries::PICK_SIU_INVESTIGATOR, vec![("patterns", patterns)])
+            .read_rows(queries::PICK_SIU_INVESTIGATOR, vec![("patterns", patterns)])
             .await?;
         rows.first().map(investigator).transpose()
     }

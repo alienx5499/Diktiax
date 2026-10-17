@@ -6,7 +6,8 @@ use super::queries;
 use crate::domain::{ClaimSummary, NewClaim, SubgraphPayload};
 use chrono::Utc;
 use falkordb::{
-    AsyncGraph, Edge, FalkorClientBuilder, FalkorConnectionInfo, FalkorValue, Node, Row,
+    AsyncGraph, Edge, FalkorClientBuilder, FalkorConnectionInfo, FalkorResult, FalkorValue, Node,
+    QueryResult, Row, RowStream,
 };
 use futures_core::Stream;
 use std::collections::HashSet;
@@ -15,6 +16,21 @@ use std::time::Duration;
 use tracing::info;
 
 pub(crate) type Params<'a> = Vec<(&'a str, FalkorValue)>;
+
+/// Server-side cap (ms) on read-only queries; the slowest detector at 5k claims is far below it.
+const READ_QUERY_TIMEOUT_MS: i64 = 5_000;
+
+/// Drains a query result into rows, failing on the first row that cannot be parsed.
+async fn collect(result: FalkorResult<QueryResult<RowStream>>) -> Result<Vec<Row>, String> {
+    let mut stream = result
+        .map_err(|e| format!("FalkorDB query failed: {e}"))?
+        .data;
+    let mut rows = Vec::with_capacity(stream.len());
+    while let Some(row) = std::future::poll_fn(|cx| Pin::new(&mut stream).poll_next(cx)).await {
+        rows.push(row.map_err(|e| format!("FalkorDB row parse failed: {e}"))?);
+    }
+    Ok(rows)
+}
 
 #[derive(Clone)]
 pub struct FalkorGraphRepository {
@@ -49,22 +65,30 @@ impl FalkorGraphRepository {
         &self.graph_name
     }
 
-    /// Executes one Cypher statement with parameters and collects every row, failing on the
-    /// first row that cannot be parsed.
+    /// Executes one Cypher statement (GRAPH.QUERY) with parameters and collects every row,
+    /// failing on the first row that cannot be parsed. Use for writes, and for statements that
+    /// must work on a graph that does not exist yet (GRAPH.QUERY creates it, RO_QUERY errors).
     pub(crate) async fn rows(&self, query: &str, params: Params<'_>) -> Result<Vec<Row>, String> {
         let mut graph = self.graph.clone();
-        let result = graph
-            .query(query)
-            .with_params(params)
-            .execute()
-            .await
-            .map_err(|e| format!("FalkorDB query failed: {e}"))?;
-        let mut stream = result.data;
-        let mut rows = Vec::with_capacity(stream.len());
-        while let Some(row) = std::future::poll_fn(|cx| Pin::new(&mut stream).poll_next(cx)).await {
-            rows.push(row.map_err(|e| format!("FalkorDB row parse failed: {e}"))?);
-        }
-        Ok(rows)
+        collect(graph.query(query).with_params(params).execute().await).await
+    }
+
+    /// Single entry point for pure reads: GRAPH.RO_QUERY with a server-side timeout.
+    pub(crate) async fn read_rows(
+        &self,
+        query: &str,
+        params: Params<'_>,
+    ) -> Result<Vec<Row>, String> {
+        let mut graph = self.graph.clone();
+        collect(
+            graph
+                .ro_query(query)
+                .with_params(params)
+                .with_timeout(READ_QUERY_TIMEOUT_MS)
+                .execute()
+                .await,
+        )
+        .await
     }
 
     pub(crate) fn graph_handle(&self) -> AsyncGraph {
@@ -72,7 +96,7 @@ impl FalkorGraphRepository {
     }
 
     pub async fn list_claims(&self) -> Result<Vec<ClaimSummary>, String> {
-        self.rows(&queries::list_claims(), vec![])
+        self.read_rows(&queries::list_claims(), vec![])
             .await?
             .iter()
             .map(claim_summary)
@@ -81,13 +105,13 @@ impl FalkorGraphRepository {
 
     pub async fn get_claim(&self, claim_id: &str) -> Result<Option<ClaimSummary>, String> {
         let rows = self
-            .rows(&queries::get_claim(), vec![("claim_id", text(claim_id))])
+            .read_rows(&queries::get_claim(), vec![("claim_id", text(claim_id))])
             .await?;
         rows.first().map(claim_summary).transpose()
     }
 
     pub async fn claim_shops(&self, claim_id: &str) -> Result<Vec<String>, String> {
-        self.rows(queries::CLAIM_SHOPS, vec![("claim_id", text(claim_id))])
+        self.read_rows(queries::CLAIM_SHOPS, vec![("claim_id", text(claim_id))])
             .await?
             .iter()
             .map(|row| col(row, "shop_id"))
@@ -101,13 +125,15 @@ impl FalkorGraphRepository {
         depth: u8,
     ) -> Result<SubgraphPayload, String> {
         let params = || vec![("claim_id", text(claim_id))];
-        let rows = self.rows(&queries::claim_subgraph(depth), params()).await?;
+        let rows = self
+            .read_rows(&queries::claim_subgraph(depth), params())
+            .await?;
         let mut payload = SubgraphPayload::default();
         let mut seen_nodes = HashSet::new();
         let mut seen_edges = HashSet::new();
 
         if rows.is_empty() {
-            let claim = self.rows(queries::CLAIM_NODE, params()).await?;
+            let claim = self.read_rows(queries::CLAIM_NODE, params()).await?;
             let row = claim
                 .first()
                 .ok_or_else(|| format!("claim {claim_id} not found"))?;

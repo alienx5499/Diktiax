@@ -104,7 +104,7 @@ Seeded scenarios: a ghost-collision ring (CLM-48291, CLM-39102, CLM-44730), a cl
 
 ## The Cypher queries
 
-Every query below is copied verbatim from [`backend/src/db/queries.rs`](backend/src/db/queries.rs) (line breaks added). Every value is passed as a parameter, never formatted into the query text; the one exception is the exploration depth, which Cypher can't parameterize, so it's clamped to 1..4 first. Each detector returns the node ids that form the evidence path.
+Every query below is copied verbatim from [`backend/src/db/queries.rs`](backend/src/db/queries.rs) (line breaks added). Every value is passed as a parameter, never formatted into the query text; the one exception is the exploration depth: on FalkorDB v4.22.1 `[*1..$depth]` fails with "Encountered unhandled type in inlined properties" ([FalkorDB#3350](https://github.com/FalkorDB/FalkorDB/issues/3350)), so the depth is clamped to 1..4 in Rust and then inlined. Each detector returns the node ids that form the evidence path.
 
 **Explore the neighbourhood** (always the first step; the agent runs it with depth 3):
 
@@ -195,7 +195,8 @@ Runs on FalkorDB v4.22.1, the newest release of the 4.x line, pinned for reprodu
 
 - **Planners only choose which graph tools to call.** The score is computed by `FraudRiskEvaluator` ([`domain/evaluator.rs`](backend/src/domain/evaluator.rs)) from detector results on the target claim, capped at 100.
 - **An LLM can't clear a claim by skipping checks.** With the Claude or Groq planner, any detector it didn't run is executed before scoring. Its closing text is labelled "not used for scoring".
-- **Bounded:** the planner gets at most 12 tool calls; the coverage guard can add up to 4 detector runs after that. If the LLM API fails, the rule-based planner takes over and the dossier says so (`planner: rule-based (fallback: groq:... failed: ...)`).
+- **Bounded:** the planner gets at most 12 tool calls; the coverage guard can add up to 4 detector runs after that. If the LLM API fails, the rule-based planner takes over and the dossier says so (`planner: rule-based (fallback: LLM rate-limited)`); the raw provider error goes to the server log only.
+- **Read-only by construction:** exploration, the four detectors, shop centrality and the claim list run through `GRAPH.RO_QUERY` with a 5 s server-side timeout (`read_rows` in [`repository.rs`](backend/src/db/repository.rs)), so none of the evidence-gathering queries can write to the graph. Writes (ingest, the verdict write-back, investigator assignment, seeding) use `GRAPH.QUERY`, as does the startup and health `RETURN 1` ping, because `GRAPH.RO_QUERY` errors on a graph that doesn't exist yet.
 - **Never cleared on bad data:** if exploring the claim or any detector on it fails, the score is only a lower bound (missing detectors can only add points). A bound that already reaches HIGH or CRITICAL still freezes the payout; anything lower becomes `INCONCLUSIVE` with status `NEEDS_MANUAL_REVIEW`, and the failed calls are named in the rationale. Only an exact `LOW_RISK` result clears a claim.
 - **Checkable:** each investigation returns a certificate with a SHA-256 digest over the claim id and the ordered steps, so a saved dossier can be re-hashed later to spot edits (the server doesn't store or verify it yet). Each detector step carries the Cypher that produced it.
 
@@ -246,6 +247,37 @@ Query latency, from [`scripts/bench_queries.py`](scripts/bench_queries.py): Falk
 | `detect_vin_cloning` | 0.126 | 0.151 | 0.248 |
 | `detect_kickback_triangle` | 0.157 | 0.187 | 0.265 |
 | `shop_centrality` | 0.048 | 0.071 | 0.162 |
+
+Three of the four detectors (ghost collision, shared contacts, VIN cloning) start from an indexed lookup of the claim, not a label scan. `GRAPH.EXPLAIN` on `detect_shared_contacts` (the 10 indexes are created at startup, see `INDEXES` in [`queries.rs`](backend/src/db/queries.rs)):
+
+```text
+Results
+    Sort
+        Project
+            Conditional Traverse | (peer)->(other:Claim)
+                Filter
+                    Conditional Traverse | (contact)->(peer:Customer)
+                        Conditional Traverse | (me)-[link:HAS_PHONE|:LIVES_AT]->(contact)
+                            Conditional Traverse | (c)->(me:Customer)
+                                Node By Index Scan | (c:Claim)
+```
+
+The plan seeks one `Claim` through the index and then only walks its relationships, so the cost grows with the claim's neighbourhood, not with the size of the graph.
+
+`detect_kickback_triangle` is the exception: its pattern begins at `(a:Accident)`, so the planner opens with `Node By Label Scan | (a:Accident)` and filters to the claim afterwards. `shop_centrality` scans every `RepairShop` on purpose, since it compares degrees across all shops.
+
+**Cross-checked with FalkorDB's built-in algorithms** ([`backend/tests/graph_algorithms.rs`](backend/tests/graph_algorithms.rs)). The detectors don't use these at runtime; the tests check that the ring the detectors find is also an isolated structure in the graph:
+
+```cypher
+CALL algo.WCC({nodeLabels: ['Customer','Claim','Phone','Address','RepairShop','Clinic'],
+  relationshipTypes: ['FILED_CLAIM','HAS_PHONE','LIVES_AT','REPAIRED_AT','TREATED_AT']})
+YIELD node, componentId WITH node, componentId WHERE node:Claim
+RETURN componentId, collect(node.id) AS claims
+```
+
+Weakly connected components put CLM-48291, CLM-39102 and CLM-44730 in one component with no other claim. `algo.pageRank(null, null)` ranks the ring's shop SHOP-801 first among repair shops (0.0234 vs 0.0210 for the next), a narrow margin on a 68-node graph. The labelled form `algo.pageRank('RepairShop', 'REPAIRED_AT')` gives every shop the same score, so the test uses the unlabelled one.
+
+Entity resolution is tested too: [`ingest_merges_shared_contacts`](backend/tests/graph_repository.rs) files two new claims with different claimants and the same phone and address, then checks there is exactly one `Phone` and one `Address` node with two incoming edges each. A third claim with that phone still leaves one `Phone` node.
 
 ## Architecture
 
@@ -316,6 +348,7 @@ The deployed demo is deliberately open: anyone can file and investigate claims o
 
 - The data is synthetic: the demo graph has 68 nodes and the scale benchmark uses 5,040 generated claims. That shows the mechanism on rings built the way the detectors expect, not real-world accuracy.
 - Detector severity uses fixed thresholds, not learned weights.
+- `detect_kickback_triangle` starts with a label scan of `Accident` (see the query plans above). Anchoring its pattern on `(c:Claim {id: $claim_id})` would make it an index seek; at 5,040 claims a full investigation still takes 17 ms median.
 - The Claude and Groq planners' request handling is unit-tested; live LLM API calls are not part of the automated tests.
 - The ghost-collision window is 90 days, so newly filed claims stop matching the seeded ring once its dates age out.
 

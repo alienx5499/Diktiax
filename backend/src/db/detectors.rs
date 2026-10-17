@@ -52,7 +52,7 @@ impl FalkorGraphRepository {
     ) -> Result<Vec<Row>, String> {
         let mut params = vec![("claim_id", text(claim_id))];
         params.extend(extra);
-        self.rows(query, params).await
+        self.read_rows(query, params).await
     }
 
     pub async fn detect_ghost_collision(
@@ -245,7 +245,7 @@ impl FalkorGraphRepository {
 
     /// Degree centrality of a shop versus the mean claim degree of all shops in the graph.
     pub async fn shop_centrality(&self, shop_id: &str) -> Result<CentralityReport, String> {
-        let rows = self.rows(queries::SHOP_DEGREES, vec![]).await?;
+        let rows = self.read_rows(queries::SHOP_DEGREES, vec![]).await?;
         let mut degrees = Vec::with_capacity(rows.len());
         let mut target = None;
         for row in &rows {
