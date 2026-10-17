@@ -180,12 +180,7 @@ async fn per_claim_rules_vs_graph_agent() {
 
     // The claims the README and blog make about this table.
     assert_eq!(agent_hits, vec![5, 0, 3, 0], "graph agent");
-    assert_eq!(
-        rule_hits[2], 0,
-        "per-claim rules miss the evasive ring members"
-    );
-    assert_eq!(
-        rule_hits[3], 2,
-        "per-claim rules flag both honest red-flag claims"
-    );
+    // Every rules cell: catches the seeded fraud, clears the controls, misses the evasive
+    // ring members and flags both honest red-flag claims.
+    assert_eq!(rule_hits, vec![5, 0, 0, 2], "per-claim rules");
 }

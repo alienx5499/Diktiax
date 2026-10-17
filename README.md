@@ -34,7 +34,7 @@ None of that lives in any single record, and a vector search over claim text can
 Give it a claim id. The agent:
 
 1. **Explores** the claim's neighbourhood in FalkorDB (3 hops).
-2. **Decides which detectors to run** based on what that neighbourhood contains. A detector whose pattern can't possibly match is skipped.
+2. **Decides which detectors to run** based on what that neighbourhood contains. With the rule-based planner, a detector whose pattern can't possibly match is skipped. With an LLM planner the model chooses, and any detector it skipped still runs before scoring.
 3. **Runs Cypher detectors** for four fraud-ring patterns, then follows the evidence: shops named in a match get a centrality check, and linked claims get corroborated.
 4. **Scores** the claim from detector results only. The LLM never sets the score.
 5. **Acts**: writes the new claim status and an `Investigation` node back to the graph, freezes the payout, assigns an SIU investigator picked from the graph by specialty and workload, and optionally fires a webhook.
@@ -194,7 +194,7 @@ Runs on FalkorDB v4.22.1, the newest release of the 4.x line, pinned for reprodu
 
 Fraud caught: rules 5/8, graph 8/8. Honest claims flagged: rules 2/5, graph 0/5. The labels were fixed by construction before anything ran.
 
-An LLM that also reads one claim at a time does no better. [`scripts/llm_only_baseline.py`](scripts/llm_only_baseline.py) shows `openai/gpt-oss-120b` (Groq, temperature 0) each claim's own file: amount, damage type, accident description, police-report flag, location and shop. Over 3 runs with identical answers it caught 5/8 fraud claims, missing all 3 evasive ring members, and flagged 1 of the 5 honest ones. Rules catch careless fraud; the graph also catches organised fraud that learned the rules, because the ring still reuses its phone, crash location and body shop. The groups are small and constructed, so read this as a demonstration of the mechanism, not an accuracy benchmark.
+An LLM that also reads one claim at a time does no better. [`scripts/llm_only_baseline.py`](scripts/llm_only_baseline.py) shows `openai/gpt-oss-120b` (Groq, temperature 0) each claim's own file: amount, damage type, accident description, police-report flag, location and shop. Over 3 runs with identical answers ([recorded output](scripts/llm_only_baseline_result.md)) it caught 5/8 fraud claims, missing all 3 evasive ring members, and flagged 1 of the 5 honest ones. Rules catch careless fraud; the graph also catches organised fraud that learned the rules, because the ring still reuses its phone, crash location and body shop. The groups are small and constructed, so read this as a demonstration of the mechanism, not an accuracy benchmark.
 
 ```bash
 cd backend && cargo test --test baseline -- --ignored --nocapture
