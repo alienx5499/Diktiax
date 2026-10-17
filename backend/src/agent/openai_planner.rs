@@ -26,28 +26,46 @@ pub struct OpenAiConfig {
     pub model: String,
     base_url: String,
     http: reqwest::Client,
-}
-
-fn env_non_blank(name: &str) -> Option<String> {
-    std::env::var(name).ok().filter(|v| !v.trim().is_empty())
+    /// The other provider's key, also scrubbed from this planner's errors ("" = none).
+    peer_key: String,
+    /// Secondary provider (`LLM_FALLBACK_*`) tried before the rule-based planner.
+    pub backup: Option<Box<OpenAiConfig>>,
 }
 
 impl OpenAiConfig {
     /// `Some` only when `GROQ_API_KEY` is set and non-blank.
     pub fn from_env() -> Result<Option<Self>, String> {
-        let Some(api_key) = env_non_blank("GROQ_API_KEY") else {
+        Self::from_vars(|name| std::env::var(name).ok())
+    }
+
+    /// `from_env` over any variable source (tests pass a map); blank values count as unset.
+    fn from_vars(var: impl Fn(&str) -> Option<String>) -> Result<Option<Self>, String> {
+        let var = |name: &str| var(name).filter(|v| !v.trim().is_empty());
+        let Some(api_key) = var("GROQ_API_KEY") else {
             return Ok(None);
         };
         let http = reqwest::Client::builder()
             .timeout(Duration::from_secs(60))
             .build()
             .map_err(|e| format!("failed to build HTTP client: {e}"))?;
-        Ok(Some(Self::new(
+        let mut primary = Self::new(
             api_key,
-            env_non_blank("GROQ_MODEL").unwrap_or_else(|| DEFAULT_MODEL.to_string()),
-            env_non_blank("LLM_BASE_URL").unwrap_or_else(|| DEFAULT_BASE_URL.to_string()),
-            http,
-        )))
+            var("GROQ_MODEL").unwrap_or_else(|| DEFAULT_MODEL.to_string()),
+            var("LLM_BASE_URL").unwrap_or_else(|| DEFAULT_BASE_URL.to_string()),
+            http.clone(),
+        );
+        if let Some(key) = var("LLM_FALLBACK_API_KEY") {
+            let mut backup = Self::new(
+                key,
+                var("LLM_FALLBACK_MODEL").unwrap_or_else(|| primary.model.clone()),
+                var("LLM_FALLBACK_BASE_URL").unwrap_or_else(|| primary.base_url.clone()),
+                http,
+            );
+            backup.peer_key = primary.api_key.clone();
+            primary.peer_key = backup.api_key.clone();
+            primary.backup = Some(Box::new(backup));
+        }
+        Ok(Some(primary))
     }
 
     fn new(api_key: String, model: String, base_url: String, http: reqwest::Client) -> Self {
@@ -56,7 +74,14 @@ impl OpenAiConfig {
             model,
             base_url: base_url.trim_end_matches('/').to_string(),
             http,
+            peer_key: String::new(),
+            backup: None,
         }
+    }
+
+    /// Scrubs both providers' keys from error text.
+    fn redact(&self, error: String) -> String {
+        redact_key(redact_key(error, &self.api_key), &self.peer_key)
     }
 
     /// `groq:<model>` on the default endpoint, otherwise `openai-compatible:<model>`.
@@ -103,6 +128,22 @@ impl OpenAiPlanner {
                 .push(json!({ "role": "system", "content": SYSTEM_PROMPT }));
             self.messages
                 .push(json!({ "role": "user", "content": text }));
+            // Resuming after another planner (backup provider): replay its executed calls as
+            // assistant/tool pairs so every `tool` message follows the call it answers.
+            for (i, outcome) in history.iter().enumerate() {
+                let id = outcome
+                    .call
+                    .id
+                    .clone()
+                    .unwrap_or_else(|| format!("prior_{i}"));
+                self.messages.push(json!({ "role": "assistant",
+                    "content": outcome.call.rationale,
+                    "tool_calls": [{ "id": id, "type": "function", "function": {
+                        "name": outcome.call.tool,
+                        "arguments": outcome.call.arguments.to_string() } }] }));
+                self.push_tool_message(&id, compact(outcome));
+            }
+            self.reported = history.len();
         }
         let fresh = &history[self.reported.min(history.len())..];
         for outcome in fresh {
@@ -256,11 +297,11 @@ impl Planner for OpenAiPlanner {
                         .push(json!({ "role": "user", "content": TOOL_CALL_RETRY }));
                     continue;
                 }
-                Err(e) => return Err(redact_key(e, &self.config.api_key)),
+                Err(e) => return Err(self.config.redact(e)),
             };
             let calls = self
                 .apply_response(response)
-                .map_err(|e| redact_key(e, &self.config.api_key))?;
+                .map_err(|e| self.config.redact(e))?;
             if !self.needs_repair {
                 return Ok(calls);
             }

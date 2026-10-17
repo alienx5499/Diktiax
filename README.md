@@ -2,7 +2,7 @@
 
 <h1 align="center">Diktiax</h1>
 
-![Diktiax: the graph picks the next query](https://github.com/user-attachments/assets/5ffa58e5-e0fc-4620-ae24-6b15aa393870)
+![Three crashes, one ring: the graph picks the next query](https://github.com/user-attachments/assets/f6b18adb-0742-46d3-ad0c-3e1b30dca7ef)
 
 **An investigation agent that finds insurance fraud rings by walking a FalkorDB graph, then acts on what it finds.**
 
@@ -193,6 +193,8 @@ Runs on FalkorDB v4.22.1, the newest release of the 4.x line, pinned for reprodu
 
 ## Why you can trust the verdict
 
+![Evidence queries run on the read-only lane with a timeout; only ingest, the verdict and the assignment write](https://github.com/user-attachments/assets/b76d4a8f-cca3-468a-aa52-846ac1b04373)
+
 - **Planners only choose which graph tools to call.** The score is computed by `FraudRiskEvaluator` ([`domain/evaluator.rs`](backend/src/domain/evaluator.rs)) from detector results on the target claim, capped at 100.
 - **An LLM can't clear a claim by skipping checks.** With the Claude or Groq planner, any detector it didn't run is executed before scoring. Its closing text is labelled "not used for scoring".
 - **Bounded:** the planner gets at most 12 tool calls; the coverage guard can add up to 4 detector runs after that. If the LLM API fails, the rule-based planner takes over and the dossier says so (`planner: rule-based (fallback: LLM rate-limited)`); the raw provider error goes to the server log only.
@@ -220,6 +222,8 @@ cd backend && cargo test --test baseline -- --ignored --nocapture
 ```
 
 **At scale (5,040 generated claims).** [`backend/tests/scale_benchmark.rs`](backend/tests/scale_benchmark.rs) generates 4,800 honest claims spread over 300 shops, 400 locations, 150 clinics and 40 adjusters (with chance overlaps and shared household addresses), 25 tight fraud rings of 8 (10 of them evasive), and 5 loose rings that share only a crash location and a body shop. The answer key's SHA-256 is written before anything is scored ([results and key](scripts/scale/RESULTS.md)).
+
+![Thirty fraud rings hidden among 5,040 generated claims](https://github.com/user-attachments/assets/95511d53-904c-468f-b023-c527063dbf73)
 
 | Group | Claims | Single-claim rules flagged | Graph agent froze payout | Graph agent sent to audit |
 |---|---|---|---|---|
@@ -328,7 +332,7 @@ cargo test -- --ignored                           # integration tests against li
 
 Everything in containers: `docker compose -f docker-compose.full.yml up --build`, then open http://localhost:3000.
 
-Optional environment (see [`.env.example`](.env.example)): `ANTHROPIC_API_KEY` switches to the Claude planner; without it, `GROQ_API_KEY` enables an LLM planner on Groq (`GROQ_MODEL` overrides `openai/gpt-oss-120b`, `LLM_BASE_URL` points it at another OpenAI-compatible endpoint such as OpenRouter, Gemini or Ollama); `WEBHOOK_URL` receives escalations, and `FALKORDB_URL` / `FALKORDB_GRAPH` point at another FalkorDB.
+Optional environment (see [`.env.example`](.env.example)): `ANTHROPIC_API_KEY` switches to the Claude planner; without it, `GROQ_API_KEY` enables an LLM planner on Groq (`GROQ_MODEL` overrides `openai/gpt-oss-120b`, `LLM_BASE_URL` points it at another OpenAI-compatible endpoint such as OpenRouter, Gemini or Ollama); `LLM_FALLBACK_API_KEY` (plus optional `LLM_FALLBACK_BASE_URL` / `LLM_FALLBACK_MODEL`) adds a backup OpenAI-compatible provider that takes over if the primary is rate-limited; `WEBHOOK_URL` receives escalations, and `FALKORDB_URL` / `FALKORDB_GRAPH` point at another FalkorDB.
 
 ## Use it from Claude (MCP)
 
@@ -340,6 +344,8 @@ claude mcp add diktiax -e FALKORDB_URL=falkor://127.0.0.1:6379 -- "$PWD/target/r
 This exposes the 8 read-only graph tools, `investigation_history` (read-only, past verdicts) and `investigate_claim`, which runs the full agent and **writes to the graph**. For Claude Desktop, use the same command and args in `claude_desktop_config.json`.
 
 ## Memory and coordination
+
+![Verdicts stay under the claim in the graph, so a new session or another agent over MCP reads the same certificate](https://github.com/user-attachments/assets/7518057e-6acc-4ec1-a181-8c226bb5c401)
 
 Diktiax keeps its own memory in the graph, and other agents can read it.
 

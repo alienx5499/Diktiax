@@ -211,3 +211,121 @@ fn rate_limit_waits_fail_over_on_daily_quota_or_spent_budget() {
     );
     assert!(!within_wait_budget(8, 5), "budget spent: fail over");
 }
+
+fn vars(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<String> {
+    let map: std::collections::HashMap<String, String> = pairs
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+    move |name| map.get(name).cloned()
+}
+
+#[test]
+fn backup_provider_needs_a_non_blank_key_and_defaults_to_the_primary() {
+    let groq = ("GROQ_API_KEY", "gsk-primary");
+    let blank = OpenAiConfig::from_vars(vars(&[groq, ("LLM_FALLBACK_API_KEY", "  ")]));
+    assert!(blank.expect("ok").expect("primary").backup.is_none());
+    assert!(
+        OpenAiConfig::from_vars(vars(&[("LLM_FALLBACK_API_KEY", "k")]))
+            .expect("ok")
+            .is_none()
+    );
+
+    let cfg = OpenAiConfig::from_vars(vars(&[groq, ("LLM_FALLBACK_API_KEY", "sk-backup")]))
+        .expect("ok")
+        .expect("primary");
+    let backup = cfg.backup.as_deref().expect("backup enabled");
+    assert_eq!(
+        (backup.model.as_str(), backup.base_url.as_str()),
+        (DEFAULT_MODEL, DEFAULT_BASE_URL)
+    );
+
+    let cfg = OpenAiConfig::from_vars(vars(&[
+        groq,
+        ("LLM_FALLBACK_API_KEY", "sk-backup"),
+        ("LLM_FALLBACK_BASE_URL", "https://openrouter.ai/api/v1/"),
+        ("LLM_FALLBACK_MODEL", "m-backup"),
+    ]))
+    .expect("ok")
+    .expect("primary");
+    let backup = cfg.backup.as_deref().expect("backup enabled");
+    assert_eq!(backup.label(), "openai-compatible:m-backup");
+    assert_eq!(backup.base_url, "https://openrouter.ai/api/v1");
+    assert_eq!(
+        cfg.label(),
+        "groq:openai/gpt-oss-120b",
+        "primary label unchanged"
+    );
+}
+
+#[test]
+fn errors_never_carry_either_providers_key() {
+    let cfg = OpenAiConfig::from_vars(vars(&[
+        ("GROQ_API_KEY", "gsk-primary"),
+        ("LLM_FALLBACK_API_KEY", "sk-backup"),
+    ]))
+    .expect("ok")
+    .expect("primary");
+    let backup = cfg.backup.as_deref().expect("backup");
+    let raw = || "HTTP 401: gsk-primary / sk-backup".to_string();
+    for c in [&cfg, backup] {
+        assert_eq!(c.redact(raw()), "HTTP 401: [redacted] / [redacted]");
+    }
+}
+
+#[test]
+fn fresh_planner_resumes_from_another_planners_history() {
+    let call = |id: &str, tool: &str| PlannedCall {
+        id: Some(id.into()),
+        tool: tool.into(),
+        arguments: json!({ "claim_id": "CLM-1" }),
+        rationale: "Explore first.".into(),
+    };
+    let history = vec![
+        ToolOutcome {
+            call: call("call_1", "explore_claim_subgraph"),
+            result: Ok(json!({ "nodes": [], "edges": [] })),
+            latency_ms: 1.0,
+        },
+        ToolOutcome {
+            call: PlannedCall::new(
+                "detect_vin_cloning",
+                json!({ "claim_id": "CLM-1" }),
+                String::new(),
+            ),
+            result: Err("db down".into()),
+            latency_ms: 1.0,
+        },
+    ];
+    let mut p = planner();
+    p.absorb("CLM-1", &history);
+    let roles: Vec<&str> = p
+        .messages
+        .iter()
+        .map(|m| m["role"].as_str().unwrap_or(""))
+        .collect();
+    assert_eq!(
+        roles,
+        ["system", "user", "assistant", "tool", "assistant", "tool"]
+    );
+    assert_eq!(p.messages[2]["tool_calls"][0]["id"], "call_1");
+    assert_eq!(
+        p.messages[2]["tool_calls"][0]["function"]["arguments"],
+        r#"{"claim_id":"CLM-1"}"#
+    );
+    assert_eq!(p.messages[3]["tool_call_id"], "call_1");
+    assert_eq!(p.messages[3]["content"], "0 nodes, 0 edges: ");
+    assert_eq!(
+        p.messages[4]["tool_calls"][0]["id"], "prior_1",
+        "id-less calls get one"
+    );
+    assert_eq!(p.messages[5]["tool_call_id"], "prior_1");
+    assert_eq!(p.messages[5]["content"], "ERROR: db down");
+
+    p.absorb("CLM-1", &history);
+    assert_eq!(
+        p.messages.len(),
+        6,
+        "replayed outcomes are not reported again"
+    );
+}

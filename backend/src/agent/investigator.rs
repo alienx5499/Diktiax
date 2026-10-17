@@ -80,11 +80,13 @@ impl ClaimInvestigator {
                 (self.planner.label(), narrative, None)
             }
             PlannerConfig::Claude(cfg) => {
-                self.run_llm(ClaudePlanner::new(cfg.clone()), claim_id, &mut outcomes)
-                    .await?
+                let primary = ClaudePlanner::new(cfg.clone());
+                self.run_llm(primary, None, claim_id, &mut outcomes).await?
             }
             PlannerConfig::OpenAi(cfg) => {
-                self.run_llm(OpenAiPlanner::new(cfg.clone()), claim_id, &mut outcomes)
+                let primary = OpenAiPlanner::new(cfg.clone());
+                let backup = cfg.backup.as_deref().cloned().map(OpenAiPlanner::new);
+                self.run_llm(primary, backup, claim_id, &mut outcomes)
                     .await?
             }
         };
@@ -147,15 +149,17 @@ impl ClaimInvestigator {
         })
     }
 
-    /// LLM planners: failures fall back to the rule-based policy instead of aborting, and the
-    /// coverage guard runs every detector the model skipped. Returns (label, narrative, note).
+    /// LLM planners: failures fall back to the backup provider (if any), then the rule-based
+    /// policy instead of aborting, and the coverage guard runs every detector the model
+    /// skipped. Returns (label, narrative, note).
     async fn run_llm<P: Planner + Send>(
         &self,
         primary: P,
+        backup: Option<P>,
         claim_id: &str,
         outcomes: &mut Vec<ToolOutcome>,
     ) -> Result<(String, Option<String>, Option<String>), String> {
-        let mut planner = FallbackPlanner::new(primary);
+        let mut planner = FallbackPlanner::new(primary, backup);
         let narrative = self.run(&mut planner, claim_id, outcomes).await?;
         self.coverage_guard(claim_id, outcomes).await;
         let primary = self.planner.label();
