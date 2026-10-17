@@ -128,7 +128,7 @@ export default function Home() {
                 Forensic Graph Intelligence
               </h1>
               <p className="text-xs sm:text-sm font-medium uppercase tracking-wider text-[#121212]/80 mt-2.5">
-                Deterministic topological reasoning & tamper-evident evidence chain
+                Deterministic topological reasoning & checkable evidence chain
               </p>
             </div>
 

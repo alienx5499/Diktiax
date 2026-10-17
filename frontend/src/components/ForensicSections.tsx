@@ -32,7 +32,7 @@ export function ForensicSections({
                 Cryptographic Evidence & Provenance Dossier
               </h2>
               <p className="text-xs font-bold uppercase tracking-wider text-[#121212]/70 font-mono">
-                Tamper-evident hash (verify by re-hashing the saved dossier).
+                Digest of the claim and steps (re-hash a saved dossier to check it).
               </p>
             </div>
           </div>
