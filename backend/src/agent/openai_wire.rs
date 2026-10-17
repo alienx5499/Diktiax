@@ -3,6 +3,16 @@
 
 use serde_json::Value;
 
+/// One 429 wait longer than this means a daily quota, not a per-minute one: fail over.
+const MAX_RETRY_WAIT_SECS: u64 = 30;
+/// Total 429 waiting per investigation, so the dashboard's request never times out.
+const MAX_TOTAL_WAIT_SECS: u64 = 45;
+
+/// Whether waiting `wait` more seconds (after `waited` already) stays inside the budget.
+pub(super) fn within_wait_budget(wait: u64, waited: u64) -> bool {
+    wait <= MAX_RETRY_WAIT_SECS && waited + wait <= MAX_TOTAL_WAIT_SECS
+}
+
 /// Seconds from a `retry-after` header (default 5 when absent or unparseable).
 pub(super) fn retry_after_secs(headers: &reqwest::header::HeaderMap) -> u64 {
     headers

@@ -4,7 +4,7 @@
 use super::claude_planner::SYSTEM_PROMPT;
 use super::evidence::compact;
 use super::openai_wire::{
-    is_tool_call_rejection, parse_arguments, retry_after_secs, TOOL_CALL_RETRY,
+    is_tool_call_rejection, parse_arguments, retry_after_secs, within_wait_budget, TOOL_CALL_RETRY,
 };
 use super::planner::{PlannedCall, Planner, ToolOutcome};
 use serde_json::{json, Value};
@@ -15,9 +15,9 @@ const DEFAULT_BASE_URL: &str = "https://api.groq.com/openai/v1";
 const DEFAULT_MODEL: &str = "openai/gpt-oss-120b";
 /// Extra round trips allowed when every tool call in a turn had unparseable arguments.
 const MAX_REPAIRS: usize = 2;
-/// HTTP 429 handling: wait `retry-after` (capped) and retry, at most this many times.
+/// HTTP 429 handling: wait `retry-after` and retry, at most this many times, within the
+/// investigation's wait budget (see `within_wait_budget`); otherwise fail over to rule-based.
 const MAX_RATE_LIMIT_RETRIES: usize = 3;
-const MAX_RETRY_WAIT_SECS: u64 = 30;
 
 /// Connection settings, read once at startup. Deliberately not `Debug`: it holds the API key.
 #[derive(Clone)]
@@ -78,6 +78,8 @@ pub struct OpenAiPlanner {
     /// Set when the last turn's tool calls were all rejected (bad arguments): ask again.
     needs_repair: bool,
     narrative: Option<String>,
+    /// Seconds already spent waiting on HTTP 429 in this investigation.
+    rate_limit_wait: u64,
 }
 
 impl OpenAiPlanner {
@@ -88,6 +90,7 @@ impl OpenAiPlanner {
             reported: 0,
             needs_repair: false,
             narrative: None,
+            rate_limit_wait: 0,
         }
     }
 
@@ -201,7 +204,7 @@ impl OpenAiPlanner {
         error.replace(&self.config.api_key, "[redacted]")
     }
 
-    async fn send(&self, body: &Value) -> Result<Value, String> {
+    async fn send(&mut self, body: &Value) -> Result<Value, String> {
         let url = format!("{}/chat/completions", self.config.base_url);
         let mut retries = 0;
         let response = loop {
@@ -214,13 +217,15 @@ impl OpenAiPlanner {
                 .send()
                 .await
                 .map_err(|e| format!("LLM API request failed: {}", e.without_url()))?;
+            let wait = retry_after_secs(response.headers());
             if response.status() != reqwest::StatusCode::TOO_MANY_REQUESTS
                 || retries == MAX_RATE_LIMIT_RETRIES
+                || !within_wait_budget(wait, self.rate_limit_wait)
             {
                 break response;
             }
             retries += 1;
-            let wait = retry_after_secs(response.headers()).min(MAX_RETRY_WAIT_SECS);
+            self.rate_limit_wait += wait;
             warn!("LLM API rate limited (HTTP 429); retry {retries} in {wait}s");
             tokio::time::sleep(Duration::from_secs(wait)).await;
         };
