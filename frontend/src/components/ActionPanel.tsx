@@ -14,6 +14,9 @@ interface ActionPanelProps {
 }
 
 export function ActionPanel({ remediation, riskScore, claimId, onReinvestigate, isInvestigating }: ActionPanelProps) {
+  // A re-run on an already reviewed claim keeps the human decision and assigns no one.
+  const reviewKept = remediation.actions_log.some((a) => a.action_type === 'KEEP_REVIEWED_STATUS');
+  const unassigned = remediation.assigned_investigator.toLowerCase() === 'unassigned';
   const [overrideState, setOverrideState] = useState<'default' | 'overridden'>('default');
   const [showPayload, setShowPayload] = useState(false);
   const isFrozen = remediation.payout_frozen && overrideState !== 'overridden';
@@ -99,12 +102,14 @@ export function ActionPanel({ remediation, riskScore, claimId, onReinvestigate, 
               </div>
               <div className="space-y-1">
                 <span className="text-sm font-black uppercase text-[#121212] block">Special Investigations Unit (SIU)</span>
-                <div className="text-xs text-[#121212] font-black uppercase">{remediation.assigned_investigator}</div>
+                <div className="text-xs text-[#121212] font-black uppercase">
+                  {reviewKept ? 'Already reviewed' : remediation.assigned_investigator}
+                </div>
                 <div className="text-xs text-[#121212]/70 font-mono">{remediation.investigator_role}</div>
               </div>
             </div>
             <span className="text-xs font-mono font-black uppercase px-2.5 py-1 rounded-none bg-[#1040C0] text-white border-2 border-[#121212] self-start">
-              AUTO-ASSIGNED
+              {reviewKept ? 'REVIEW DONE' : unassigned ? 'NOT NEEDED' : 'AUTO-ASSIGNED'}
             </span>
           </div>
 
