@@ -189,6 +189,8 @@ Dashed relationships are written by the agent.
 | `RepairShop`, `Clinic`, `Adjuster` | `id`, `name` | The service providers that rings reuse |
 | `Investigator` | `specialties`, `open_cases` | Seeded SIU staff the agent assigns from |
 | `Investigation` | `decision`, `risk_score`, certificate id | The agent's recorded verdict |
+| `Review` | `decision`, `reviewer`, `note`, `reviewed_at`; `claim_id` (unique) | A person's decision on a frozen payout: confirm fraud or release |
+| `InvestigationChain` | `claim_id` (unique) | Marker that makes the first verdict on a claim unique, so concurrent runs can't start two chains |
 
 | Relationship | From → To | Meaning |
 |--------------|-----------|---------|
@@ -205,6 +207,8 @@ Dashed relationships are written by the agent.
 | `SUPERSEDES` | `Investigation` → `Investigation` | Written by the agent: the newer verdict on a claim points to the one it replaces (`superseded_id`, unique) |
 | `RELIED_ON` | `Investigation` → `Claim` | Written by the agent: the linked claims the evidence came from |
 | `ASSIGNED_INVESTIGATOR` | `Claim` → `Investigator` | Written by the agent: who works the case |
+| `REVIEWS` | `Review` → `Investigation` | Written by the review: the verdict a person confirmed or released |
+| `REVIEWED` | `Investigator` → `Review` | Written by the review: who made the call |
 
 Seeded scenarios: a ghost-collision ring (CLM-48291, CLM-39102, CLM-44730), a cloned-VIN pair across CA and NV (CLM-55104, CLM-31205), and three clean controls (CLM-10022, CLM-20417, CLM-20988).
 
