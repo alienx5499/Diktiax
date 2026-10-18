@@ -2,11 +2,13 @@
 //! scoring, provenance certificate, graph write-back actions and the dossier.
 
 use super::claude_planner::{ClaudeConfig, ClaudePlanner};
-use super::dossier::InvestigationDossier;
+use super::dossier::{InvestigationDossier, InvestigationMemory};
 use super::evidence;
 use super::fallback_planner::FallbackPlanner;
 use super::openai_planner::{OpenAiConfig, OpenAiPlanner};
-use super::planner::{PlannedCall, Planner, ToolOutcome, DETECTORS, MAX_STEPS};
+use super::planner::{
+    repeated_ring_component, PlannedCall, Planner, ToolOutcome, DETECTORS, MAX_STEPS,
+};
 use super::rule_planner::RuleBasedPlanner;
 use super::verdict;
 use crate::actions::ActionDispatcher;
@@ -71,12 +73,17 @@ impl ClaimInvestigator {
             self.planner.label()
         );
 
+        // One read: count, latest verdict and its RELIED_ON agree even under concurrent runs.
+        let prior = self.repo.prior_verdicts(claim_id).await?;
+
         let mut outcomes: Vec<ToolOutcome> = Vec::new();
+        let mut skipped = Vec::new();
         let (planner_label, narrative, fallback_note) = match &self.planner {
             PlannerConfig::RuleBased => {
-                let narrative = self
-                    .run(&mut RuleBasedPlanner, claim_id, &mut outcomes)
-                    .await?;
+                let remembered = prior.as_ref().map(|p| p.relied_on.clone());
+                let mut planner = RuleBasedPlanner::remembering(remembered.unwrap_or_default());
+                let narrative = self.run(&mut planner, claim_id, &mut outcomes).await?;
+                skipped = planner.skipped().to_vec();
                 (self.planner.label(), narrative, None)
             }
             PlannerConfig::Claude(cfg) => {
@@ -102,6 +109,10 @@ impl ClaimInvestigator {
             outcomes.len(),
         );
         summary_rationale.push_str(&verdict::failure_note(assessment.risk_score, &failures));
+        let memory = InvestigationMemory::new(prior, &assessment.risk_tier, &skipped);
+        if let Some(memory) = &memory {
+            summary_rationale.push_str(&format!("\n\n{}", memory.note()));
+        }
         if let Some(note) = fallback_note {
             summary_rationale.push_str(&format!("\n\n{note}"));
         }
@@ -154,6 +165,7 @@ impl ClaimInvestigator {
             subgraph,
             agent_trace,
             planner: planner_label,
+            memory,
         })
     }
 
@@ -192,7 +204,11 @@ impl ClaimInvestigator {
                 break;
             }
             for call in calls.into_iter().take(MAX_STEPS - history.len()) {
-                history.push(self.execute(call).await);
+                let outcome = match repeated_ring_component(history, &call) {
+                    Some(reused) => reused,
+                    None => self.execute(call).await,
+                };
+                history.push(outcome);
             }
         }
         Ok(planner.narrative().map(str::to_string))

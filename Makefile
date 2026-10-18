@@ -52,7 +52,7 @@ test:
 	cd backend && cargo test
 
 test-live:
-	cd backend && cargo test -- --ignored
+	cd backend && cargo test -- --ignored --test-threads=1
 
 docker-full:
 	docker compose -f docker-compose.full.yml up -d --build

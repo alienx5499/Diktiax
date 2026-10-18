@@ -9,6 +9,7 @@ pub const MAX_STEPS: usize = 12;
 
 use crate::tools::{
     DETECT_GHOST_COLLISION, DETECT_KICKBACK_TRIANGLE, DETECT_SHARED_CONTACTS, DETECT_VIN_CLONING,
+    RING_COMPONENTS,
 };
 
 pub const DETECTORS: [&str; 4] = [
@@ -64,6 +65,35 @@ pub trait Planner {
     }
 }
 
+/// algo.WCC labels the whole graph, so `ring_components` runs at most once per investigation,
+/// whatever the planner asks. A repeat for the same claim gets the earlier outcome back; one
+/// for another claim is refused (the component is per claim, so reusing it would be wrong).
+/// `None`: not a repeat, execute the call.
+pub fn repeated_ring_component(history: &[ToolOutcome], call: &PlannedCall) -> Option<ToolOutcome> {
+    if call.tool != RING_COMPONENTS {
+        return None;
+    }
+    let (i, earlier) = history
+        .iter()
+        .enumerate()
+        .find(|(_, o)| o.call.tool == RING_COMPONENTS)?;
+    let step = i + 1;
+    let mut call = call.clone();
+    let result = if earlier.call.claim_arg() == call.claim_arg() {
+        call.rationale = format!("{} (reused from step {step}, not re-run)", call.rationale);
+        earlier.result.clone()
+    } else {
+        Err(format!(
+            "ring_components already ran at step {step}; algo.WCC runs once per investigation"
+        ))
+    };
+    Some(ToolOutcome {
+        call,
+        result,
+        latency_ms: 0.0,
+    })
+}
+
 /// Hides the API key in error text; an empty key leaves the text unchanged.
 pub(super) fn redact_key(error: String, key: &str) -> String {
     if key.is_empty() {
@@ -74,7 +104,50 @@ pub(super) fn redact_key(error: String, key: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::redact_key;
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn ring_components_runs_once_per_investigation() {
+        let wcc = |claim: &str| {
+            PlannedCall::new(RING_COMPONENTS, json!({ "claim_id": claim }), "why".into())
+        };
+        let first = ToolOutcome {
+            call: wcc("C1"),
+            result: Ok(json!({ "claims": ["C1", "C2"] })),
+            latency_ms: 5.0,
+        };
+        let explore = PlannedCall::new(
+            "explore_claim_subgraph",
+            json!({ "claim_id": "C1" }),
+            String::new(),
+        );
+        assert!(
+            repeated_ring_component(&[], &wcc("C1")).is_none(),
+            "first call executes"
+        );
+        assert!(repeated_ring_component(std::slice::from_ref(&first), &explore).is_none());
+
+        let history = [
+            ToolOutcome {
+                call: explore,
+                result: Ok(json!({})),
+                latency_ms: 1.0,
+            },
+            first,
+        ];
+        let again = repeated_ring_component(&history, &wcc("C1")).expect("not re-run");
+        assert_eq!(again.result, history[1].result);
+        assert_eq!(again.latency_ms, 0.0);
+        assert!(
+            again.call.rationale.contains("reused from step 2"),
+            "{}",
+            again.call.rationale
+        );
+
+        let other = repeated_ring_component(&history, &wcc("C9")).expect("not run");
+        assert!(other.result.unwrap_err().contains("already ran at step 2"));
+    }
 
     #[test]
     fn redact_key_hides_every_occurrence_and_ignores_empty_key() {

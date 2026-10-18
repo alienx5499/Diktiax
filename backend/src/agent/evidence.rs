@@ -5,11 +5,12 @@ use super::dossier::AgentStep;
 use super::planner::{ToolOutcome, DETECTORS};
 use crate::db::queries;
 use crate::domain::{
-    CentralityReport, ClaimSummary, FraudPatternMatch, ProvenanceStep, SubgraphPayload,
+    CentralityReport, ClaimSummary, FraudPatternMatch, ProvenanceStep, RingComponent,
+    SubgraphPayload,
 };
 use crate::tools::{
     DETECT_GHOST_COLLISION, DETECT_KICKBACK_TRIANGLE, DETECT_SHARED_CONTACTS, DETECT_VIN_CLONING,
-    EXPLORE_CLAIM_SUBGRAPH, LIST_CLAIM_SHOPS, SHOP_CENTRALITY,
+    EXPLORE_CLAIM_SUBGRAPH, LIST_CLAIM_SHOPS, RING_COMPONENTS, SHOP_CENTRALITY,
 };
 use serde_json::Value;
 
@@ -106,6 +107,17 @@ pub fn summarize(o: &ToolOutcome) -> String {
             Err(_) => "unparseable centrality report".into(),
         },
         LIST_CLAIM_SHOPS => format!("shops: {}", value),
+        RING_COMPONENTS => match serde_json::from_value::<RingComponent>(value.clone()) {
+            Ok(r) => truncate(
+                &format!(
+                    "WCC component of {} claims: {}",
+                    r.size,
+                    r.claims.join(", ")
+                ),
+                200,
+            ),
+            Err(_) => "unparseable ring component".into(),
+        },
         _ => match serde_json::from_value::<ClaimSummary>(value.clone()) {
             Ok(c) => format!(
                 "{} filed by {} for {:.2}, status {}",

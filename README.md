@@ -19,8 +19,8 @@ https://github.com/user-attachments/assets/d0a85e78-28cc-4b8d-aef5-4c8555119ce0
 > **Judges, the 60-second path**
 > 1. Open https://diktiax.vercel.app (it can take up to a minute to wake). Click **CLM-48291**, the ring claim; CLM-20988, CLM-10022 and CLM-20417 are clean controls. One investigation per visitor every 15 s.
 > 2. Video: [0:10](https://youtu.be/LZfy5o2mVDY?t=10) the ring · [1:29](https://youtu.be/LZfy5o2mVDY?t=89) the agent investigates · [2:22](https://youtu.be/LZfy5o2mVDY?t=142) 5,040 claims · [3:16](https://youtu.be/LZfy5o2mVDY?t=196) memory and coordination.
-> 3. Headline: on 5,040 generated claims the graph agent froze 200 of 240 fraud claims and 0 honest ones (precision 1.00, recall 0.83, F1 0.91); per-claim rules flagged 2,789 honest drivers (0.04, 0.50, 0.08). The other 40 fraud claims and 169 honest ones went to audit. 17 ms median per investigation.
-> 4. Proof: `cargo test --release --test scale_benchmark -- --ignored --nocapture` and `cargo test --release --test agent_memory -- --ignored` in `backend/`. The hosted graph reseeds on every restart, so its investigation history starts empty.
+> 3. Headline: on 5,040 generated claims the graph agent froze 200 of 240 fraud claims and 0 honest ones (precision 1.00, recall 0.83, F1 0.91); per-claim rules flagged 2,789 honest drivers (0.04, 0.50, 0.08). The other 40 fraud claims and 169 honest ones went to audit. 17 ms median per investigation. A pre-registered re-run on a fresh seed gave the same picture: rules flagged 2,753 honest drivers, the graph froze 200 of 240 and 0 honest.
+> 4. Proof: `cargo test --release --test scale_benchmark -- --ignored --nocapture` and `cargo test --release --test agent_memory -- --ignored --test-threads=1` in `backend/`. The hosted graph reseeds on every restart, so its investigation history starts empty.
 
 ## The problem
 
@@ -81,10 +81,10 @@ The planner explores, runs two detectors, and stops. It never calls `detect_shar
 
 - **Verdicts outlive the session.** Every investigation writes an `Investigation` node (certificate id, decision, risk score, time) under the claim, and re-investigating adds another one, so the graph holds the full history. `GET /api/claims/{id}/investigations` and the MCP tool `investigation_history` return it newest first. [`verdicts_survive_across_sessions`](backend/tests/agent_memory.rs) investigates a claim, drops the client, connects a new one and checks the same certificate comes back, then investigates again and gets two entries.
 - **Other agents pick up where Diktiax left off.** `investigation_history` is served over MCP and HTTP, so Claude or any MCP client can see what the agent already decided instead of re-running it. The agent's own planners never see this tool (a unit test checks it), so a past verdict can't stand in for fresh evidence.
-- **Memory is consumed, not just stored.** `investigate_claim` over MCP reads the claim's history first. If a verdict is already recorded it returns that verdict (`reused: true`, certificate id, decision, risk score, time) without running the agent or writing anything; `force: true` runs a fresh investigation. A per-claim lock covers the check, the run and the write, so 8 concurrent calls on a never-investigated claim run the agent once and the other 7 get the reused verdict, while calls on different claims still run in parallel ([`concurrent_mcp_investigate_claim_runs_the_agent_once`](backend/tests/agent_memory.rs); without the lock the same test sees 8 runs). HTTP `POST /api/investigate`, which the dashboard uses, always runs a fresh investigation.
+- **Memory is consumed, not just stored.** `investigate_claim` over MCP reads the claim's history first. If a verdict is already recorded it returns that verdict (`reused: true`, certificate id, decision, risk score, time) without running the agent or writing anything; `force: true` runs a fresh investigation. A per-claim lock covers the check, the run and the write, so 8 concurrent calls on a never-investigated claim run the agent once and the other 7 get the reused verdict, while calls on different claims still run in parallel ([`concurrent_mcp_investigate_claim_runs_the_agent_once`](backend/tests/agent_memory.rs)). HTTP `POST /api/investigate`, which the dashboard uses, always runs a fresh investigation, but the agent still reads its memory first: one `PRIOR_VERDICTS` read returns the verdict count, the latest verdict and the claims it `RELIED_ON`. The dossier gains a `memory` block (`prior_investigations`, `latest_prior`, `agrees_with_latest`, `skipped_corroboration`, `tool_calls_saved`), the rationale says whether this run agrees, and the rule planner skips corroboration on claims the last verdict already relied on (ring claim: 9 tool calls first, 7 on a re-run; same score). Scoring never reads a past verdict. Tests: [`second_run_remembers_and_skips_corroborated_work`](backend/tests/agent_memory.rs), [`concurrent_reinvestigations_report_consistent_memory`](backend/tests/agent_memory.rs).
 - **Memory has structure.** Each new verdict on a claim `SUPERSEDES` the previous one, so a claim's history is a single linear chain, and it links with `RELIED_ON` to the linked claims its evidence came from. Two unique constraints (`SUPERSEDES.superseded_id` and one `InvestigationChain` start marker per claim) keep the chain linear under concurrency; [`concurrent_investigations_form_one_supersedes_chain`](backend/tests/agent_memory.rs) runs 16 investigations of one claim at once and checks 16 nodes, 15 links and one head, and [`chain_constraints_reject_a_fork`](backend/tests/agent_memory.rs) forces the exact write a lost race would make and checks it is rejected with nothing left behind.
 - **Shared state with the SIU team.** Assigning an investigator raises their `open_cases` in the graph, and the next case goes to the investigator whose specialties best cover the matched patterns, least loaded first, so earlier investigations shape later assignments. A claim keeps its first investigator: re-investigating it reuses the existing assignment instead of picking again, so `open_cases` only rises once.
-- **Consistent under concurrency.** [`concurrent_investigations_keep_shared_state_consistent`](backend/tests/agent_memory.rs) runs 16 investigations at once (all 8 claims twice) and checks there are exactly 16 verdicts, exactly one investigator on each of the 5 flagged claims, none on the 3 clean ones, and an `open_cases` increase of exactly 5. Writing it caught a real race (two concurrent runs could assign a claim twice). FalkorDB does not serialise a single read-then-write statement under concurrency (32 parallel calls produced up to 16 duplicate edges in testing), so the fix is a database constraint: one `MERGE` statement plus a unique constraint on `ASSIGNED_INVESTIGATOR.claim_id`, created at seed time and awaited until it is enforced. [`concurrent_direct_assignment_creates_one_edge`](backend/tests/agent_memory.rs) and [`concurrent_investigations_of_one_claim_assign_once`](backend/tests/agent_memory.rs) run 32 concurrent writers on one claim and always leave exactly one edge.
+- **Consistent under concurrency.** [`concurrent_investigations_keep_shared_state_consistent`](backend/tests/agent_memory.rs) runs 16 investigations at once (all 8 claims twice) and checks there are exactly 16 verdicts, exactly one investigator on each of the 5 flagged claims, none on the 3 clean ones, and an `open_cases` increase of exactly 5. Writing it caught a real race (two concurrent runs could assign a claim twice). FalkorDB does not document that a single read-then-write statement is serialised under concurrency, so the fix is a database constraint: one `MERGE` statement plus a unique constraint on `ASSIGNED_INVESTIGATOR.claim_id`, created at seed time and awaited until it is enforced. [`concurrent_direct_assignment_creates_one_edge`](backend/tests/agent_memory.rs) and [`concurrent_investigations_of_one_claim_assign_once`](backend/tests/agent_memory.rs) run 32 concurrent writers on one claim and always leave exactly one edge. [`without_the_constraint_concurrent_assignment_race_is_observed`](backend/tests/agent_memory.rs) drops the constraint and races the statement alone: on FalkorDB v4.22.1 it left one edge in all 60 rounds we ran (1,920 calls), so we could not reproduce a duplicate with the current single `MERGE` statement; the constraint is kept as the guarantee.
 - **Handoff between planners.** If the LLM planner fails mid-run, the rule-based planner continues from the same step history rather than starting over, and the dossier records where it took over.
 
 A real MCP session (JSON-RPC over stdio against the `--mcp-server` binary, recorded on a throwaway graph): another agent asks for history, gets nothing, runs the investigation once, then gets the stored verdict back instead of a second run.
@@ -259,7 +259,7 @@ RETURN chosen.id AS id, chosen.name AS name, chosen.specialties AS specialties,
   chosen.open_cases AS open_cases
 ```
 
-On FalkorDB v4.22.1 a single read-then-write statement is not serialised under concurrency (32 parallel calls of the assignment statement left up to 16 duplicate edges in testing), so each of these writes is backed by a unique constraint created at startup and awaited until it is enforced: `ASSIGNED_INVESTIGATOR.claim_id`, `SUPERSEDES.superseded_id` and `InvestigationChain.claim_id`. A violation rolls the statement back and it is retried.
+FalkorDB does not document that a single read-then-write statement is serialised under concurrency (with the constraint dropped, 1,920 racing calls of the assignment statement on v4.22.1 never left a duplicate, but that is an observation, not a guarantee), so each of these writes is backed by a unique constraint created at startup and awaited until it is enforced: `ASSIGNED_INVESTIGATOR.claim_id`, `SUPERSEDES.superseded_id` and `InvestigationChain.claim_id`. A violation rolls the statement back and it is retried.
 
 Runs on FalkorDB v4.22.1, the newest release of the 4.x line, pinned for reproducible demos.
 
@@ -366,16 +366,16 @@ Entity resolution is tested too: [`ingest_merges_shared_contacts`](backend/tests
 | Bounded variable-length traversal | [`queries.rs:49`](backend/src/db/queries.rs) | `[*1..3]` neighbourhood that decides which detectors run (depth clamped and inlined, FalkorDB#3350) |
 | `GRAPH.RO_QUERY` + timeout | [`repository.rs:79-89`](backend/src/db/repository.rs) | All evidence queries are read-only with a 5 s server-side timeout |
 | Indexes + `GRAPH.EXPLAIN` | [`queries.rs:6`](backend/src/db/queries.rs) | 13 indexes plus 3 unique constraints that make concurrent writes safe; three of four detectors open with an index seek (plans above) |
-| Write-back | [`queries.rs:118-146`](backend/src/db/queries.rs) | Claim status, `Investigation` node, `MERGE`d `ASSIGNED_INVESTIGATOR` edge |
+| Write-back | [`queries.rs:118-160, 199`](backend/src/db/queries.rs) | Claim status, `Investigation` node, `MERGE`d `ASSIGNED_INVESTIGATOR` edge |
 | Named graphs | [`tests/common/mod.rs`](backend/tests/common/mod.rs) | Each test run gets its own graph; the scale graph is named by its data hash (`scale_e03eb6b9`) |
-| `algo.WCC`, `algo.pageRank` | [`graph_algorithms.rs:60,83`](backend/tests/graph_algorithms.rs) · [`queries.rs:157`](backend/src/db/queries.rs) | Test-time cross-checks on the demo graph. WCC is also live through the `ring_components` MCP/HTTP tool (read-only, 5 s timeout), which returns every claim in the target's component; the detectors don't use it, and live shop centrality is a degree count ([`queries.rs:94`](backend/src/db/queries.rs)) |
+| `algo.WCC`, `algo.pageRank` | [`graph_algorithms.rs:60,83`](backend/tests/graph_algorithms.rs) · [`queries.rs:219`](backend/src/db/queries.rs) | Test-time cross-checks on the demo graph. WCC is also live through the `ring_components` tool (read-only, 5 s timeout), which returns every claim in the target's component. The rule planner calls it once after a detector match and spreads its corroboration runs (one per matched detector, as before) across ring members the evidence names; scoring still reads only the target claim's detectors, and live shop centrality is a degree count ([`queries.rs:94`](backend/src/db/queries.rs)) |
 | MCP | [`backend/src/mcp`](backend/src/mcp) | The same graph tools, plus `investigation_history` and `ring_components`, for Claude or any MCP client |
 
 ## Architecture
 
 ![Diktiax architecture: Vercel dashboard, Render container with the Rust agent and FalkorDB, Groq planner, Claude over MCP](https://github.com/user-attachments/assets/1ff17889-0d11-41e4-a3f9-9fcf21e3c726)
 
-The agent, the HTTP API and the MCP server all use the same tool catalog, so Claude calls the same graph tools the agent calls, plus three that only outside agents get: `investigate_claim`, `investigation_history` and `ring_components`. In production FalkorDB and the backend share one Render container, with FalkorDB bound to loopback; locally they run as two Docker services.
+The agent, the HTTP API and the MCP server all use the same tool catalog, so Claude calls the same graph tools the agent calls, plus two that only outside agents get: `investigate_claim` and `investigation_history`. In production FalkorDB and the backend share one Render container, with FalkorDB bound to loopback; locally they run as two Docker services.
 
 - **Backend:** Rust 1.99 (Axum 0.8, Tokio 1.53, `falkordb` crate 0.10, reqwest 0.13 with rustls). FalkorDB v4.22.1 is the only database.
 - **Frontend:** Next.js 16.4 / React 19.3, TypeScript 6, Tailwind CSS 4, Bun. Agent trace timeline, live graph canvas, claim intake form.
@@ -415,7 +415,7 @@ cd backend
 cargo run --release -- --investigate CLM-48291    # prints the full dossier as JSON
 cargo run --release -- --seed                     # reset the graph (investigations write to it)
 cargo test                                        # unit tests
-cargo test -- --ignored                           # integration tests against live FalkorDB
+cargo test -- --ignored --test-threads=1          # integration tests against live FalkorDB
 ```
 
 Everything in containers: `docker compose -f docker-compose.full.yml up --build`, then open http://localhost:3000.
@@ -429,7 +429,7 @@ cd backend && cargo build --release
 claude mcp add diktiax -e FALKORDB_URL=falkor://127.0.0.1:6379 -- "$PWD/target/release/claimgraph-backend" --mcp-server
 ```
 
-This exposes the 8 read-only graph tools, `investigation_history` (read-only, past verdicts), `ring_components` (read-only, the claim's `algo.WCC` component) and `investigate_claim`, which runs the full agent and **writes to the graph**. For Claude Desktop, use the same command and args in `claude_desktop_config.json`.
+This exposes the 9 read-only graph tools (including `ring_components`, the claim's `algo.WCC` component), `investigation_history` (read-only, past verdicts) and `investigate_claim`, which runs the full agent and **writes to the graph**. For Claude Desktop, use the same command and args in `claude_desktop_config.json`.
 
 ## Deploy
 
@@ -454,7 +454,7 @@ The deployed demo is deliberately open: anyone can file and investigate claims o
 | `POST /api/seed` · `GET /api/health` | Reset the demo graph (needs `x-admin-token`; local dev: `DIKTIAX_DEV=1`) · health check |
 
 - `POST /api/investigate` is limited to one request per visitor every 15 s (HTTP 429 with `Retry-After`), so one visitor can't use up the LLM quota for everyone.
-- `ring_components` over HTTP (`POST /api/mcp/call`) runs `algo.WCC` across the whole graph, so it is limited to one call per visitor every 3 s (HTTP 429 with `Retry-After`).
+- `ring_components` over HTTP (`POST /api/mcp/call`) runs `algo.WCC` across the whole graph, so it is limited to one call per visitor every 3 s (HTTP 429 with `Retry-After`). Inside an investigation the agent runs it at most once, whatever the planner asks.
 
 ## Limitations
 

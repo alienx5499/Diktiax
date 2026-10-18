@@ -10,7 +10,7 @@ interface EvidenceCardProps {
   confidence: number;
 }
 
-export function EvidenceCard({ certificate, confidence }: EvidenceCardProps) {
+export function EvidenceCard({ certificate, riskScore, confidence }: EvidenceCardProps) {
   const [copied, setCopied] = useState(false);
   const [expandedStep, setExpandedStep] = useState<number | null>(1);
 
@@ -53,6 +53,9 @@ export function EvidenceCard({ certificate, confidence }: EvidenceCardProps) {
               }`}
             >
               {certificate.overall_decision.replace(/_/g, ' ')}
+            </span>
+            <span className="text-xs font-mono font-black uppercase px-2.5 py-1 rounded-none bg-white border-2 border-[#121212] tabular">
+              Risk {riskScore}/100
             </span>
             <span className="text-xs text-[#121212] font-mono font-black flex items-center gap-1.5 px-2.5 py-1 rounded-none bg-[#E0E0E0] border-2 border-[#121212] tabular">
               <Clock className="w-3.5 h-3.5 text-[#121212]" />

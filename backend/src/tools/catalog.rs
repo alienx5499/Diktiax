@@ -24,7 +24,6 @@ pub const SHOP_CENTRALITY: &str = "shop_centrality";
 pub const INVESTIGATE_CLAIM: &str = "investigate_claim";
 /// External-only (MCP + /api/mcp): never offered to the agent's own planners.
 pub const INVESTIGATION_HISTORY: &str = "investigation_history";
-/// External-only (MCP + /api/mcp): never offered to the agent's own planners.
 pub const RING_COMPONENTS: &str = "ring_components";
 
 pub const DEFAULT_DEPTH: u8 = 2;
@@ -138,11 +137,20 @@ pub fn tool_definitions() -> Vec<ToolDefinition> {
             }),
             &["shop_id"],
         ),
+        claim_id_only(
+            RING_COMPONENTS,
+            "Run FalkorDB's weakly connected components (algo.WCC) over customers, claims, phones, \
+             addresses, repair shops and clinics, and return every claim in the same component as \
+             this one. Use after a detector match to see the whole ring and pick which linked \
+             claims to corroborate. Labels the whole graph on every call, so call it once per \
+             investigation. Returns {claim_id, claims (sorted ids, including this claim), size}; \
+             errors if the claim id is unknown.",
+        ),
     ]
 }
 
-/// Tools for external agents (MCP, /api/mcp): the planner catalog plus external-only memory
-/// tools. The agent's planners use `tool_definitions()` and never see these extras.
+/// Tools for external agents (MCP, /api/mcp): the planner catalog plus the external-only memory
+/// tool. The agent's planners use `tool_definitions()` and never see the extra.
 pub fn external_tool_definitions() -> Vec<ToolDefinition> {
     let mut tools = tool_definitions();
     tools.push(claim_id_only(
@@ -150,13 +158,6 @@ pub fn external_tool_definitions() -> Vec<ToolDefinition> {
         "Past verdicts the Diktiax agent recorded for this claim, newest first: certificate id, \
          decision, risk score, time. Use it to continue from earlier work instead of \
          re-investigating.",
-    ));
-    tools.push(claim_id_only(
-        RING_COMPONENTS,
-        "Run FalkorDB's weakly connected components (algo.WCC) over customers, claims, phones, \
-         addresses, repair shops and clinics, and return every claim in the same component as \
-         this one. Use to see the whole ring a claim belongs to. Returns {claim_id, claims \
-         (sorted ids, including this claim), size}; errors if the claim id is unknown.",
     ));
     tools
 }

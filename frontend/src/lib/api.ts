@@ -123,6 +123,24 @@ export interface InvestigationDossier {
   agent_trace: AgentStep[];
   /** "claude:<model>" | "rule-based" */
   planner: string;
+  /** Omitted when the claim had no earlier investigation. */
+  memory?: InvestigationMemory;
+}
+
+/** One entry of GET /api/claims/{id}/investigations (newest first). */
+export interface InvestigationRecord {
+  certificate_id: string;
+  decision: string;
+  risk_score: number;
+  recorded_at: string;
+}
+
+export interface InvestigationMemory {
+  prior_investigations: number;
+  latest_prior: InvestigationRecord;
+  agrees_with_latest: boolean;
+  skipped_corroboration: string[];
+  tool_calls_saved: number;
 }
 
 export const API_BASE = process.env.NEXT_PUBLIC_API_BASE || 'http://127.0.0.1:3001';
@@ -133,6 +151,8 @@ export class ApiError extends Error {
     message: string,
     public readonly status: number,
     public readonly offline: boolean,
+    /** Seconds to wait, set on HTTP 429. */
+    public readonly retryAfterSecs?: number,
   ) {
     super(message);
     this.name = 'ApiError';
@@ -156,9 +176,24 @@ async function request<T>(path: string, init: RequestInit = {}, timeoutMs = DEFA
   }
   if (!res.ok) {
     const body = await res.text().catch(() => '');
-    throw new ApiError(`Backend returned HTTP ${res.status}${body ? `: ${body.slice(0, 200)}` : ''}`, res.status, false);
+    throw new ApiError(
+      `Backend returned HTTP ${res.status}${body ? `: ${body.slice(0, 200)}` : ''}`,
+      res.status,
+      false,
+      res.status === 429 ? retryAfterSecs(res, body) : undefined,
+    );
   }
   return (await res.json()) as T;
+}
+
+/**
+ * Retry-After is not a CORS-safelisted header, so cross-origin it reads as null unless the
+ * backend exposes it; fall back to the "Try again in N s" text in the body.
+ */
+function retryAfterSecs(res: Response, body: string): number | undefined {
+  const raw = res.headers.get('Retry-After') ?? body.match(/try again in (\d+)\s*s/i)?.[1];
+  const n = Number(raw);
+  return raw != null && Number.isFinite(n) ? Math.max(0, Math.ceil(n)) : undefined;
 }
 
 const JSON_HEADERS = { 'Content-Type': 'application/json' };
@@ -190,5 +225,8 @@ export const createClaim = (claim: NewClaim) =>
 
 export const investigateClaim = (claimId: string) =>
   request<InvestigationDossier>(`/api/investigate/${encodeURIComponent(claimId)}`, { method: 'POST', headers: JSON_HEADERS }, 150000);
+
+export const fetchInvestigationHistory = (claimId: string) =>
+  request<InvestigationRecord[]>(`/api/claims/${encodeURIComponent(claimId)}/investigations`, {}, 15000);
 
 export const seedDatabase = () => request<{ status: string; message: string }>('/api/seed', { method: 'POST' });

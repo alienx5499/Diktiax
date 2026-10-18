@@ -19,6 +19,16 @@ pub struct InvestigationRecord {
     pub recorded_at: String,
 }
 
+/// What the agent remembers about a claim before re-investigating it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PriorVerdicts {
+    /// Verdicts recorded before this read.
+    pub count: usize,
+    pub latest: InvestigationRecord,
+    /// Claims the latest verdict RELIED_ON.
+    pub relied_on: Vec<String>,
+}
+
 /// Command payload for filing a brand-new claim into the graph.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NewClaim {

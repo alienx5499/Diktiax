@@ -167,6 +167,19 @@ pub const INVESTIGATION_HISTORY: &str = "MATCH (c:Claim {id: $claim_id}) \
      i.recorded_at AS recorded_at \
      ORDER BY recorded_at DESC, certificate_id DESC";
 
+/// The agent's memory of a claim in ONE statement (one consistent snapshot): how many verdicts
+/// exist, the newest one, and the claims it RELIED_ON. A known claim with no investigations
+/// yields `prior = 0` and nulls; an unknown claim yields no rows.
+pub const PRIOR_VERDICTS: &str = "MATCH (c:Claim {id: $claim_id}) \
+     OPTIONAL MATCH (c)-[:HAS_INVESTIGATION]->(i:Investigation) \
+     WITH c, i ORDER BY i.recorded_at DESC, i.id DESC \
+     WITH c, collect(i) AS chain \
+     WITH size(chain) AS prior, chain[0] AS latest \
+     OPTIONAL MATCH (latest)-[:RELIED_ON]->(l:Claim) \
+     RETURN prior, latest.id AS certificate_id, latest.decision AS decision, \
+     latest.risk_score AS risk_score, latest.recorded_at AS recorded_at, \
+     collect(l.id) AS relied_on";
+
 /// SIU investigator whose specialties best cover the matched patterns, least loaded first.
 pub const PICK_SIU_INVESTIGATOR: &str = "MATCH (i:Investigator) \
      WITH i, size([p IN $patterns WHERE p IN i.specialties]) AS coverage \
@@ -177,8 +190,9 @@ pub const PICK_SIU_INVESTIGATOR: &str = "MATCH (i:Investigator) \
 /// and changes nothing), otherwise the PICK_SIU_INVESTIGATOR choice gets the edge and
 /// open_cases + 1. No rows only when the graph holds no Investigator nodes (or no such claim).
 ///
-/// One statement is not enough on its own: on FalkorDB v4.22.1, 32 concurrent runs of it on one
-/// claim (no unique constraint) created up to 16 edges, every round. ASSIGNMENT_CONSTRAINT
+/// FalkorDB does not document one statement as atomic under concurrency (without the constraint,
+/// 60 rounds x 32 racing runs on v4.22.1 never left a duplicate edge, an observation only; see
+/// `without_the_constraint_concurrent_assignment_race_is_observed`). ASSIGNMENT_CONSTRAINT
 /// (seeded, `r.claim_id` set here) is the guard: a duplicate commit fails and rolls back,
 /// open_cases included, and the caller re-runs the statement, which then finds the winner's edge.
 /// With the constraint in place, 20 rounds x 32 racing calls never even produced a violation.

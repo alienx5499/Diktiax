@@ -17,6 +17,7 @@ pub enum ToolCall {
     KickbackTriangle { claim_id: String },
     ClaimShops { claim_id: String },
     ShopCentrality { shop_id: String },
+    RingComponent { claim_id: String },
 }
 
 /// Reads a required, non-empty string argument (trimmed).
@@ -74,6 +75,9 @@ pub fn parse_call(name: &str, args: &Value) -> Result<ToolCall, String> {
         catalog::SHOP_CENTRALITY => ToolCall::ShopCentrality {
             shop_id: required_str(args, "shop_id")?,
         },
+        catalog::RING_COMPONENTS => ToolCall::RingComponent {
+            claim_id: claim_id()?,
+        },
         unknown => return Err(format!("unknown tool '{unknown}'")),
     })
 }
@@ -104,6 +108,7 @@ pub async fn run(repo: &FalkorGraphRepository, call: ToolCall) -> Result<Value, 
         }
         ToolCall::ClaimShops { claim_id } => to_json(repo.claim_shops(&claim_id).await?),
         ToolCall::ShopCentrality { shop_id } => to_json(repo.shop_centrality(&shop_id).await?),
+        ToolCall::RingComponent { claim_id } => to_json(repo.ring_component(&claim_id).await?),
     }
 }
 
@@ -117,7 +122,7 @@ pub async fn execute_tool(
 }
 
 /// Entry point for external callers (MCP, /api/mcp/call): `execute_tool` plus the external-only
-/// tools, which the agent loop (it calls `execute_tool`) can therefore never run.
+/// tool, which the agent loop (it calls `execute_tool`) can therefore never run.
 pub async fn execute_external_tool(
     repo: &FalkorGraphRepository,
     name: &str,
@@ -126,10 +131,6 @@ pub async fn execute_external_tool(
     if name == catalog::INVESTIGATION_HISTORY {
         let claim_id = required_str(args, "claim_id")?;
         return to_json(repo.investigation_history(&claim_id).await?);
-    }
-    if name == catalog::RING_COMPONENTS {
-        let claim_id = required_str(args, "claim_id")?;
-        return to_json(repo.ring_component(&claim_id).await?);
     }
     execute_tool(repo, name, args).await
 }
@@ -157,12 +158,13 @@ mod tests {
 
     #[test]
     fn agent_loop_cannot_parse_external_only_tools() {
-        for name in [catalog::INVESTIGATION_HISTORY, catalog::RING_COMPONENTS] {
-            assert!(
-                parse_call(name, &json!({ "claim_id": "C" })).is_err(),
-                "{name}"
-            );
-        }
+        assert!(parse_call(catalog::INVESTIGATION_HISTORY, &json!({ "claim_id": "C" })).is_err());
+        assert_eq!(
+            parse_call(catalog::RING_COMPONENTS, &json!({ "claim_id": "C" })),
+            Ok(ToolCall::RingComponent {
+                claim_id: "C".into()
+            })
+        );
     }
 
     #[test]

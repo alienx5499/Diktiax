@@ -1,7 +1,17 @@
 'use client';
 
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { ClaimSummary, InvestigationDossier, fetchClaims, investigateClaim, seedDatabase, checkBackendHealth, ApiError } from '@/lib/api';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import {
+  ClaimSummary,
+  InvestigationDossier,
+  InvestigationRecord,
+  fetchClaims,
+  fetchInvestigationHistory,
+  investigateClaim,
+  seedDatabase,
+  checkBackendHealth,
+  ApiError,
+} from '@/lib/api';
 
 import { Navbar } from '@/components/Navbar';
 import { GraphCanvas } from '@/components/GraphCanvas';
@@ -12,6 +22,17 @@ import { NewClaimForm } from '@/components/NewClaimForm';
 import { ErrorPanel } from '@/components/ErrorPanel';
 import { BootLoader } from '@/components/BootLoader';
 import { Footer } from '@/components/Footer';
+import { VerdictHeader } from '@/components/VerdictHeader';
+import { MemoryPanel } from '@/components/MemoryPanel';
+
+/** Demo scenario labels from the seed data; the ring is listed first, other claims keep API order. */
+const RING_CLAIM = 'CLM-48291';
+const CLAIM_LABELS: Record<string, string> = {
+  [RING_CLAIM]: 'fraud ring',
+  'CLM-20988': 'clean control',
+  'CLM-10022': 'clean control',
+  'CLM-20417': 'clean control',
+};
 
 const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
@@ -28,6 +49,16 @@ export default function Home() {
   const [activePattern, setActivePattern] = useState<string | null>(null);
   // True until the first claims request settles: covers a cold-starting backend.
   const [booting, setBooting] = useState<boolean>(true);
+  /** null records = history endpoint unavailable (panel degrades quietly). */
+  const [history, setHistory] = useState<{ claimId: string; records: InvestigationRecord[] | null } | null>(null);
+  const [rateLimitMsg, setRateLimitMsg] = useState<string | null>(null);
+  // Last successful result, restored when an investigation is rate limited.
+  const lastGood = useRef<{ claimId: string; dossier: InvestigationDossier } | null>(null);
+
+  const orderedClaims = useMemo(
+    () => [...claims.filter((c) => c.claim_id === RING_CLAIM), ...claims.filter((c) => c.claim_id !== RING_CLAIM)],
+    [claims],
+  );
 
   const evidenceIds = useMemo(() => {
     const patterns = dossier?.patterns_matched ?? [];
@@ -39,12 +70,26 @@ export default function Home() {
     setIsInvestigating(true);
     setSelectedClaimId(claimId);
     setInvestigateError(null);
+    setRateLimitMsg(null);
     setDossier(null);
     setActivePattern(null);
     try {
-      setDossier(await investigateClaim(claimId));
+      const result = await investigateClaim(claimId);
+      lastGood.current = { claimId, dossier: result };
+      setDossier(result);
+      fetchInvestigationHistory(claimId).then(
+        (records) => setHistory({ claimId, records }),
+        () => setHistory({ claimId, records: null }),
+      );
     } catch (err) {
-      setInvestigateError(errMsg(err));
+      if (err instanceof ApiError && err.status === 429) {
+        const wait = err.retryAfterSecs;
+        setRateLimitMsg(`One investigation every 15 s per visitor. Try again${wait != null ? ` in ${wait} s` : ' shortly'}.`);
+        setSelectedClaimId(lastGood.current?.claimId ?? null);
+        setDossier(lastGood.current?.dossier ?? null);
+      } else {
+        setInvestigateError(errMsg(err));
+      }
     } finally {
       setIsInvestigating(false);
     }
@@ -131,8 +176,9 @@ export default function Home() {
                 {claims.length === 0 && !claimsError && (
                   <span className="font-mono text-xs font-bold uppercase text-[#121212]/70">No claims yet. Submit one below.</span>
                 )}
-                {claims.map((claim) => {
+                {orderedClaims.map((claim) => {
                   const isSelected = claim.claim_id === selectedClaimId;
+                  const label = CLAIM_LABELS[claim.claim_id];
                   return (
                     <button
                       key={claim.claim_id}
@@ -144,6 +190,11 @@ export default function Home() {
                       }`}
                     >
                       {claim.claim_id}
+                      {label && (
+                        <span className={`block text-[10px] tracking-widest ${isSelected ? 'text-white' : 'text-[#121212]/70'}`}>
+                          {label}
+                        </span>
+                      )}
                     </button>
                   );
                 })}
@@ -167,6 +218,24 @@ export default function Home() {
             message={investigateError}
             onRetry={() => loadInvestigation(selectedClaimId)}
           />
+        )}
+
+        {rateLimitMsg && (
+          <div
+            role="status"
+            className="w-full bg-[#FFF9C4] border-2 lg:border-4 border-[#121212] shadow-[6px_6px_0px_0px_#121212] rounded-none p-4 font-mono text-xs font-black uppercase"
+          >
+            {rateLimitMsg}
+          </div>
+        )}
+
+        {dossier && (
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-start">
+            <div className="lg:col-span-2">
+              <VerdictHeader dossier={dossier} />
+            </div>
+            <MemoryPanel history={history?.claimId === dossier.claim_id ? history.records : null} memory={dossier.memory} />
+          </div>
         )}
 
         {/* Subgraph Canvas Section */}

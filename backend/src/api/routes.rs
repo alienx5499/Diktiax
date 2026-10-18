@@ -24,7 +24,8 @@ pub fn create_router(state: AppState) -> Router {
     let cors = CorsLayer::new()
         .allow_origin(Any)
         .allow_methods(Any)
-        .allow_headers(Any);
+        .allow_headers(Any)
+        .expose_headers([axum::http::header::RETRY_AFTER]);
     Router::new()
         .route("/api/health", get(handlers::health))
         .route(

@@ -296,14 +296,13 @@ mod tests {
             .as_array()
             .cloned()
             .unwrap_or_default();
-        for name in ["investigation_history", "ring_components"] {
-            assert!(planner.iter().all(|t| t.name != name), "{name}");
-            assert!(mcp.iter().any(|t| t["name"] == name), "{name}");
-            assert!(
-                external_tool_definitions().iter().any(|t| t.name == name),
-                "{name}"
-            );
-        }
+        let name = "investigation_history";
+        assert!(planner.iter().all(|t| t.name != name));
+        assert!(mcp.iter().any(|t| t["name"] == name));
+        assert!(external_tool_definitions().iter().any(|t| t.name == name));
+        // The WCC tool is planner-visible, so external agents get it through the shared catalog.
+        assert!(planner.iter().any(|t| t.name == "ring_components"));
+        assert!(mcp.iter().any(|t| t["name"] == "ring_components"));
     }
 
     #[test]

@@ -50,6 +50,20 @@ async fn rule_based_investigation_end_to_end() {
             .any(|s| s.tool == "shop_centrality"),
         "evidence shop gets a centrality check"
     );
+    // The WCC ring component picks the corroborating claims: one per matched detector, spread
+    // across the ring's other members instead of re-checking one peer.
+    assert!(fraud
+        .agent_trace
+        .iter()
+        .any(|s| s.tool == "ring_components"));
+    let mut corroborated: Vec<&str> = fraud
+        .agent_trace
+        .iter()
+        .filter_map(|s| s.arguments["claim_id"].as_str())
+        .filter(|id| *id != "CLM-48291")
+        .collect();
+    corroborated.sort();
+    assert_eq!(corroborated, vec!["CLM-39102", "CLM-44730"]);
     assert_eq!(
         fraud.certificate.topological_evidence.len(),
         fraud.agent_trace.len()

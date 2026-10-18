@@ -1,15 +1,16 @@
 //! Deterministic, graph-driven planner. Every decision is derived from the CONTENT of prior
 //! tool results: the explored neighbourhood decides which detectors are worth running, matched
-//! evidence decides which shops get a centrality check and which linked claim is followed.
+//! evidence decides which shops get a centrality check, and the claim's algo.WCC ring component
+//! decides which linked claims get corroboration runs.
 //!
 //! Detector gating only uses NECESSARY conditions of each detector's Cypher pattern that are
 //! fully visible in a depth-3 neighbourhood, so a skipped detector could never have matched.
 
 use super::planner::*;
-use crate::domain::{FraudPatternMatch, SubgraphPayload};
+use crate::domain::{FraudPatternMatch, RingComponent, SubgraphPayload};
 use crate::tools::{
     DETECT_GHOST_COLLISION, DETECT_KICKBACK_TRIANGLE, DETECT_SHARED_CONTACTS, DETECT_VIN_CLONING,
-    EXPLORE_CLAIM_SUBGRAPH, LIST_CLAIM_SHOPS, SHOP_CENTRALITY,
+    EXPLORE_CLAIM_SUBGRAPH, LIST_CLAIM_SHOPS, RING_COMPONENTS, SHOP_CENTRALITY,
 };
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -17,7 +18,28 @@ use std::collections::HashMap;
 /// Depth at which shared contacts, co-located accidents and VINs become visible (3 hops).
 const EXPLORE_DEPTH: u8 = 3;
 
-pub struct RuleBasedPlanner;
+/// `remembered`: linked claims the latest prior verdict RELIED_ON. Corroboration runs on them
+/// are skipped (recorded in `skipped`); calls on the target claim are never filtered, so the
+/// score cannot change.
+#[derive(Default)]
+pub struct RuleBasedPlanner {
+    remembered: Vec<String>,
+    skipped: Vec<PlannedCall>,
+}
+
+impl RuleBasedPlanner {
+    pub fn remembering(remembered: Vec<String>) -> Self {
+        Self {
+            remembered,
+            skipped: Vec::new(),
+        }
+    }
+
+    /// Corroboration calls not made because a prior verdict already relied on their claim.
+    pub fn skipped(&self) -> &[PlannedCall] {
+        &self.skipped
+    }
+}
 
 impl Planner for RuleBasedPlanner {
     async fn plan(
@@ -25,7 +47,21 @@ impl Planner for RuleBasedPlanner {
         claim_id: &str,
         history: &[ToolOutcome],
     ) -> Result<Vec<PlannedCall>, String> {
-        Ok(next_calls(claim_id, history))
+        let (skip, keep): (Vec<_>, Vec<_>) =
+            next_calls(claim_id, history).into_iter().partition(|c| {
+                c.claim_arg()
+                    .is_some_and(|id| id != claim_id && self.remembered.iter().any(|r| r == id))
+            });
+        for call in skip {
+            let seen = self
+                .skipped
+                .iter()
+                .any(|s| s.tool == call.tool && s.claim_arg() == call.claim_arg());
+            if !seen {
+                self.skipped.push(call);
+            }
+        }
+        Ok(keep)
     }
 }
 
@@ -90,7 +126,99 @@ pub fn next_calls(claim_id: &str, history: &[ToolOutcome]) -> Vec<PlannedCall> {
         return centrality;
     }
 
-    follow_linked_claim(&view, history)
+    let corroborate = corroboratable(history, claim_id);
+    if corroborate.is_empty() {
+        return Vec::new();
+    }
+    let Some(scope) = outcome(history, RING_COMPONENTS, claim_id) else {
+        return vec![PlannedCall::new(
+            RING_COMPONENTS,
+            json!({ "claim_id": claim_id }),
+            format!("Patterns matched on {claim_id}; find its WCC ring component to pick which linked claims to corroborate."),
+        )];
+    };
+    match scope
+        .result
+        .as_ref()
+        .ok()
+        .and_then(|v| serde_json::from_value::<RingComponent>(v.clone()).ok())
+    {
+        Some(ring) => corroborate_in_ring(&ring, &matched, &corroborate, history),
+        // WCC failed: fall back to the first claim linked through shared contacts.
+        None => follow_linked_claim(&view, history),
+    }
+}
+
+/// Matched target detectors worth re-running from a linked claim's side. Shared contacts is
+/// symmetric, so re-running it from the peer adds nothing.
+fn corroboratable<'h>(history: &'h [ToolOutcome], claim_id: &str) -> Vec<&'h ToolOutcome> {
+    history
+        .iter()
+        .filter(|o| o.call.claim_arg() == Some(claim_id) && o.call.tool != DETECT_SHARED_CONTACTS)
+        .filter(|o| {
+            DETECTORS.contains(&o.call.tool.as_str()) && matches!(&o.result, Ok(v) if !v.is_null())
+        })
+        .collect()
+}
+
+/// One corroboration run per matched detector (the same cap as following a single linked
+/// claim). Candidates are ring members (same WCC component) that the evidence names, this
+/// detector's own path first; each detector takes a member no earlier detector took, so the
+/// runs spread across the ring. A detector already run on any candidate is done.
+fn corroborate_in_ring(
+    ring: &RingComponent,
+    matched: &[FraudPatternMatch],
+    detectors: &[&ToolOutcome],
+    history: &[ToolOutcome],
+) -> Vec<PlannedCall> {
+    let claim_id = ring.claim_id.as_str();
+    let mut taken: Vec<&str> = Vec::new();
+    let mut calls = Vec::new();
+    for o in detectors {
+        let tool = o.call.tool.as_str();
+        let own = o
+            .result
+            .as_ref()
+            .ok()
+            .and_then(|v| serde_json::from_value::<FraudPatternMatch>(v.clone()).ok())
+            .map(|m| m.evidence_path)
+            .unwrap_or_default();
+        let mut candidates: Vec<&str> = Vec::new();
+        for id in own
+            .iter()
+            .chain(matched.iter().flat_map(|m| &m.evidence_path))
+        {
+            let member = ring.claims.iter().find(|c| *c == id && *c != claim_id);
+            if let Some(member) = member.filter(|m| !candidates.contains(&m.as_str())) {
+                candidates.push(member);
+            }
+        }
+        if candidates
+            .iter()
+            .any(|id| outcome(history, tool, id).is_some())
+        {
+            continue;
+        }
+        let Some(pick) = candidates
+            .iter()
+            .find(|id| !taken.contains(id))
+            .or(candidates.first())
+            .copied()
+        else {
+            continue;
+        };
+        taken.push(pick);
+        let rationale = format!(
+            "{pick} is in {claim_id}'s WCC ring component ({} claims) and named in the evidence; check whether {tool} also holds from its side.",
+            ring.size
+        );
+        calls.push(PlannedCall::new(
+            tool,
+            json!({ "claim_id": pick }),
+            rationale,
+        ));
+    }
+    calls
 }
 
 /// Re-runs the matched ring detectors from the perspective of the first claim linked through
@@ -109,10 +237,8 @@ fn follow_linked_claim(view: &GraphView, history: &[ToolOutcome]) -> Vec<Planned
     }) else {
         return Vec::new();
     };
-    history
-        .iter()
-        .filter(|o| o.call.claim_arg() == Some(claim_id) && o.call.tool != DETECT_SHARED_CONTACTS)
-        .filter(|o| DETECTORS.contains(&o.call.tool.as_str()) && matches!(&o.result, Ok(v) if !v.is_null()))
+    corroboratable(history, claim_id)
+        .into_iter()
         .filter(|o| outcome(history, &o.call.tool, linked).is_none())
         .map(|o| {
             let rationale = format!(

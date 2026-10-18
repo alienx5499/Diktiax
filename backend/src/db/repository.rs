@@ -5,7 +5,9 @@ use super::mapping::{
     claim_summary, col, graph_edge, graph_node, investigation_record, node_key, opt_text, text,
 };
 use super::queries;
-use crate::domain::{ClaimSummary, InvestigationRecord, NewClaim, RingComponent, SubgraphPayload};
+use crate::domain::{
+    ClaimSummary, InvestigationRecord, NewClaim, PriorVerdicts, RingComponent, SubgraphPayload,
+};
 use chrono::Utc;
 use falkordb::{
     AsyncGraph, Edge, FalkorClientBuilder, FalkorConnectionInfo, FalkorResult, FalkorValue, Node,
@@ -129,6 +131,26 @@ impl FalkorGraphRepository {
         rows.iter()
             .filter_map(|row| investigation_record(row).transpose())
             .collect()
+    }
+
+    /// Count, newest verdict and its RELIED_ON claims from one read (PRIOR_VERDICTS), so they
+    /// agree even while other runs record verdicts. `None` when never investigated.
+    pub async fn prior_verdicts(&self, claim_id: &str) -> Result<Option<PriorVerdicts>, String> {
+        let rows = self
+            .read_rows(queries::PRIOR_VERDICTS, vec![("claim_id", text(claim_id))])
+            .await?;
+        let row = rows
+            .first()
+            .ok_or_else(|| format!("claim {claim_id} not found"))?;
+        let Some(latest) = investigation_record(row)? else {
+            return Ok(None);
+        };
+        let count: i64 = col(row, "prior")?;
+        Ok(Some(PriorVerdicts {
+            count: usize::try_from(count).map_err(|e| format!("column 'prior': {e}"))?,
+            latest,
+            relied_on: col(row, "relied_on")?,
+        }))
     }
 
     /// The claim's weakly connected component (algo.WCC); errors if the claim is unknown.

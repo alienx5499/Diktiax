@@ -130,11 +130,13 @@ fn matched_evidence_drives_centrality_then_linked_claim() {
         json!({ "shop_id": "S1" }),
         Ok(json!({})),
     ));
+    assert_eq!(tools(&next_calls("C1", &h)), vec![RING_COMPONENTS]);
+    h.push(done(RING_COMPONENTS, c1.clone(), Err("timeout".into())));
     let linked = next_calls("C1", &h);
     assert_eq!(
         tools(&linked),
         vec![DETECT_GHOST_COLLISION],
-        "only matched, non-contact detectors are re-run"
+        "WCC failed: only matched, non-contact detectors are re-run on the contact peer"
     );
     assert_eq!(linked[0].arguments["claim_id"], "C2");
 
@@ -161,4 +163,122 @@ fn evidence_without_shop_lists_claim_shops() {
     assert_eq!(tools(&next_calls("C1", &h)), vec![LIST_CLAIM_SHOPS]);
     h.push(done(LIST_CLAIM_SHOPS, c1, Ok(json!(["S1"]))));
     assert_eq!(tools(&next_calls("C1", &h)), vec![SHOP_CENTRALITY]);
+}
+
+#[tokio::test]
+async fn remembered_linked_claim_skips_corroboration_only() {
+    let c1 = json!({ "claim_id": "C1" });
+    let h = vec![
+        done(EXPLORE_CLAIM_SUBGRAPH, c1.clone(), Ok(ring_graph())),
+        done(
+            DETECT_GHOST_COLLISION,
+            c1.clone(),
+            Ok(pattern("Ghost", &["C1", "L1", "S1", "C2"])),
+        ),
+        done(
+            DETECT_SHARED_CONTACTS,
+            c1.clone(),
+            Ok(pattern("Contacts", &["C1", "U1", "P1", "U2", "C2"])),
+        ),
+        done(DETECT_VIN_CLONING, c1.clone(), Ok(Value::Null)),
+        done(DETECT_KICKBACK_TRIANGLE, c1.clone(), Ok(Value::Null)),
+        done(SHOP_CENTRALITY, json!({ "shop_id": "S1" }), Ok(json!({}))),
+    ];
+    // Target-claim calls pass through even when the target itself is "remembered".
+    let mut planner = RuleBasedPlanner::remembering(vec!["C1".into(), "C2".into()]);
+    assert_eq!(
+        tools(&planner.plan("C1", &h[..1]).await.unwrap()),
+        DETECTORS.to_vec()
+    );
+    assert_eq!(
+        tools(&planner.plan("C1", &h).await.unwrap()),
+        vec![RING_COMPONENTS],
+        "the ring is re-read: a member that joined since the last verdict would be corroborated"
+    );
+    let mut h = h;
+    h.push(done(RING_COMPONENTS, c1, ring(&["C1", "C2"])));
+    for _ in 0..2 {
+        assert!(planner.plan("C1", &h).await.unwrap().is_empty());
+    }
+    assert_eq!(tools(planner.skipped()), vec![DETECT_GHOST_COLLISION]);
+    assert_eq!(planner.skipped()[0].claim_arg(), Some("C2"));
+
+    let mut fresh = RuleBasedPlanner::default();
+    assert_eq!(
+        tools(&fresh.plan("C1", &h).await.unwrap()),
+        vec![DETECT_GHOST_COLLISION]
+    );
+    assert!(fresh.skipped().is_empty());
+}
+
+fn ring(claims: &[&str]) -> Result<Value, String> {
+    Ok(json!({ "claim_id": "C1", "claims": claims, "size": claims.len() }))
+}
+
+/// Ghost and kickback matched; the ring component decides who corroborates each of them.
+fn ring_history(component: Result<Value, String>) -> Vec<ToolOutcome> {
+    let c1 = json!({ "claim_id": "C1" });
+    vec![
+        done(EXPLORE_CLAIM_SUBGRAPH, c1.clone(), Ok(ring_graph())),
+        done(
+            DETECT_GHOST_COLLISION,
+            c1.clone(),
+            Ok(pattern("Ghost", &["C1", "L1", "S1", "C2", "C3"])),
+        ),
+        done(
+            DETECT_SHARED_CONTACTS,
+            c1.clone(),
+            Ok(pattern("Contacts", &["C1", "U1", "P1", "U2", "C2"])),
+        ),
+        done(DETECT_VIN_CLONING, c1.clone(), Ok(Value::Null)),
+        done(
+            DETECT_KICKBACK_TRIANGLE,
+            c1.clone(),
+            Ok(pattern("Kickback", &["C1", "J1", "S1", "M1", "C2", "C4"])),
+        ),
+        done(SHOP_CENTRALITY, json!({ "shop_id": "S1" }), Ok(json!({}))),
+        done(RING_COMPONENTS, c1, component),
+    ]
+}
+
+fn claim_args(calls: &[PlannedCall]) -> Vec<(&str, &str)> {
+    calls
+        .iter()
+        .map(|c| (c.tool.as_str(), c.claim_arg().unwrap_or("")))
+        .collect()
+}
+
+#[test]
+fn ring_component_spreads_corroboration_across_members() {
+    let mut h = ring_history(ring(&["C1", "C2", "C3"]));
+    let calls = next_calls("C1", &h);
+    assert_eq!(
+        claim_args(&calls),
+        vec![
+            (DETECT_GHOST_COLLISION, "C2"),
+            (DETECT_KICKBACK_TRIANGLE, "C3")
+        ],
+        "C4 is outside the component; C3 is the next untaken ring member"
+    );
+    for call in calls {
+        h.push(done(&call.tool, call.arguments, Ok(Value::Null)));
+    }
+    assert!(
+        next_calls("C1", &h).is_empty(),
+        "one run per matched detector"
+    );
+}
+
+#[test]
+fn ring_component_limits_corroboration_to_its_members() {
+    let calls = next_calls("C1", &ring_history(ring(&["C1", "C4"])));
+    assert_eq!(
+        claim_args(&calls),
+        vec![
+            (DETECT_GHOST_COLLISION, "C4"),
+            (DETECT_KICKBACK_TRIANGLE, "C4")
+        ],
+        "C2 and C3 are outside the component; both detectors share its one evidence member"
+    );
+    assert!(next_calls("C1", &ring_history(ring(&["C1"]))).is_empty());
 }

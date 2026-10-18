@@ -5,11 +5,15 @@
 mod common;
 
 use claimgraph_backend::actions::{status_for, ActionDispatcher, Webhook};
-use claimgraph_backend::agent::{ClaimInvestigator, PlannerConfig};
+use claimgraph_backend::agent::{ClaimInvestigator, InvestigationDossier, PlannerConfig};
+use claimgraph_backend::db::queries::ASSIGNMENT_CONSTRAINT;
 use claimgraph_backend::db::FalkorGraphRepository;
 use claimgraph_backend::mcp::InvestigateClaim;
 use common::TestGraph;
-use falkordb::{FalkorClientBuilder, FalkorConnectionInfo, FalkorValue};
+use falkordb::{
+    ConstraintType, EntityType, FalkorAsyncClient, FalkorClientBuilder, FalkorConnectionInfo,
+    FalkorValue,
+};
 use futures_core::Stream;
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
@@ -309,6 +313,99 @@ async fn concurrent_direct_assignment_creates_one_edge() {
         assert_eq!(delta, 1, "round {round}: open_cases delta {delta}");
         assert_eq!(reported.len(), 1, "round {round}: {reported:?}");
     }
+    drop(repos);
+    drop(graph);
+}
+
+async fn has_assignment_constraint(client: &FalkorAsyncClient, graph: &TestGraph) -> bool {
+    let (rel, prop) = ASSIGNMENT_CONSTRAINT;
+    client
+        .select_graph(&graph.name)
+        .list_constraints()
+        .await
+        .expect("constraints")
+        .data
+        .iter()
+        .any(|c| c.entity_type == EntityType::Edge && c.label == rel && c.properties == [prop])
+}
+
+/// Tries to reproduce the race ASSIGNMENT_CONSTRAINT guards against: with the constraint
+/// dropped, 32 concurrent assign_once calls per round (two clients), up to RACE_ROUNDS rounds,
+/// stopping at the first duplicate edge. Observational: it reports what happened and fails only
+/// on a broken setup. On FalkorDB v4.22.1 (4 query threads) 3 x 20 rounds never left more than
+/// one edge, so the single MERGE statement is what serialised here; the constraint stays as the
+/// guarantee, since FalkorDB does not document that one statement is atomic. Reseeding at the
+/// end restores the constraint.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "requires a live FalkorDB (docker compose up -d falkordb)"]
+async fn without_the_constraint_concurrent_assignment_race_is_observed() {
+    let names = vec!["Collusion Ring".to_string()];
+    let graph = TestGraph::new("claimgraph_assign_dup_it");
+    let mut repos = Vec::new();
+    for _ in 0..2 {
+        repos.push(
+            FalkorGraphRepository::connect(&graph.url, &graph.name)
+                .await
+                .expect("FalkorDB running"),
+        );
+    }
+    let info: FalkorConnectionInfo = graph.url.as_str().try_into().expect("url");
+    let client = FalkorClientBuilder::new_async()
+        .with_connection_info(info)
+        .build()
+        .await
+        .expect("client");
+    let (rel, prop) = ASSIGNMENT_CONSTRAINT;
+    let mut per_round = Vec::new();
+    for round in 0..RACE_ROUNDS {
+        repos[0].seed(true).await.expect("seed");
+        client
+            .select_graph(&graph.name)
+            .drop_constraint(ConstraintType::Unique, EntityType::Edge, rel, &[prop])
+            .await
+            .expect("drop constraint");
+        assert!(!has_assignment_constraint(&client, &graph).await);
+        let before = read_counts(&graph, OPEN_CASES).await;
+
+        let barrier = std::sync::Arc::new(tokio::sync::Barrier::new(RACERS));
+        let handles: Vec<_> = (0..RACERS)
+            .map(|n| {
+                let (repo, names, barrier) = (
+                    repos[n % repos.len()].clone(),
+                    names.clone(),
+                    barrier.clone(),
+                );
+                tokio::spawn(async move {
+                    barrier.wait().await;
+                    repo.assign_once(RACE_CLAIM, &names).await
+                })
+            })
+            .collect();
+        for handle in handles {
+            handle.await.expect("task").expect("assign").expect("some");
+        }
+        let (edges, delta) = race_outcome(&graph, &before).await;
+        assert!(
+            edges >= 1 && delta == edges,
+            "round {round}: {edges} edges, delta {delta}"
+        );
+        per_round.push(edges);
+        if edges > 1 {
+            break;
+        }
+    }
+    let duplicates: i64 = per_round.iter().map(|e| e - 1).sum();
+    println!(
+        "WITHOUT CONSTRAINT: {} round(s) x {RACERS} calls, edges per round {per_round:?}, \
+         {duplicates} duplicate edge(s)",
+        per_round.len()
+    );
+
+    repos[0]
+        .seed(true)
+        .await
+        .expect("reseed restores the constraint");
+    assert!(has_assignment_constraint(&client, &graph).await);
     drop(repos);
     drop(graph);
 }
@@ -828,5 +925,183 @@ async fn chain_constraints_reject_a_fork() {
     assert_eq!(total_investigation_count(&graph).await, before);
 
     drop(repo);
+    drop(graph);
+}
+
+/// Rule-based trace length of a first investigation on a freshly seeded graph (flagged claims
+/// include the one ring_components call that picks the corroboration targets).
+const FIRST_RUN_STEPS: [(&str, usize); 3] = [("CLM-48291", 9), ("CLM-55104", 8), ("CLM-10022", 3)];
+
+fn calls_on<'a>(dossier: &'a InvestigationDossier, claim_id: &str) -> Vec<&'a str> {
+    dossier
+        .agent_trace
+        .iter()
+        .filter(|s| s.arguments.get("claim_id").and_then(Value::as_str) == Some(claim_id))
+        .map(|s| s.tool.as_str())
+        .collect()
+}
+
+/// A first investigation is exactly what it was before memory existed: no `memory` field in
+/// the JSON, same number of steps.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "requires a live FalkorDB (docker compose up -d falkordb)"]
+async fn first_run_has_no_memory_and_unchanged_steps() {
+    let graph = TestGraph::new("claimgraph_memory_first_it");
+    let (repo, investigator) = session(&graph).await;
+    repo.seed(true).await.expect("seed");
+    for (claim_id, steps) in FIRST_RUN_STEPS {
+        let dossier = investigator.investigate(claim_id).await.expect("dossier");
+        assert!(dossier.memory.is_none(), "{claim_id}");
+        let json = serde_json::to_value(&dossier).expect("json");
+        assert!(json.get("memory").is_none(), "{claim_id}: memory omitted");
+        assert!(!dossier.summary_rationale.contains("Memory:"));
+        assert_eq!(
+            dossier.agent_trace.len(),
+            steps,
+            "{claim_id} first-run steps"
+        );
+    }
+    drop((repo, investigator));
+    drop(graph);
+}
+
+/// The second run reads the first verdict, skips corroboration on the linked claims the first
+/// verdict relied on (both ring members the WCC step picked), and still reaches the same score
+/// from the target-claim detectors.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "requires a live FalkorDB (docker compose up -d falkordb)"]
+async fn second_run_remembers_and_skips_corroborated_work() {
+    let graph = TestGraph::new("claimgraph_memory_second_it");
+    let (repo, investigator) = session(&graph).await;
+    repo.seed(true).await.expect("seed");
+
+    let first = investigator.investigate(RACE_CLAIM).await.expect("first");
+    let second = investigator.investigate(RACE_CLAIM).await.expect("second");
+    let memory = second.memory.as_ref().expect("memory on re-investigation");
+    println!(
+        "first {} calls, second {} calls, memory {memory:?}",
+        first.agent_trace.len(),
+        second.agent_trace.len()
+    );
+
+    assert_eq!(memory.prior_investigations, 1);
+    assert_eq!(
+        memory.latest_prior.certificate_id,
+        first.certificate.certificate_id
+    );
+    assert_eq!(memory.latest_prior.decision, first.risk_tier);
+    assert_eq!(memory.latest_prior.risk_score, first.risk_score);
+    assert!(memory.agrees_with_latest);
+    assert_eq!(memory.skipped_corroboration, vec!["CLM-44730", "CLM-39102"]);
+    let linked = ["CLM-44730", "CLM-39102"];
+    let saved: usize = linked.iter().map(|id| calls_on(&first, id).len()).sum();
+    assert_eq!(memory.tool_calls_saved, saved);
+    assert!(memory.tool_calls_saved > 0);
+    assert!(linked.iter().all(|id| calls_on(&second, id).is_empty()));
+    assert_eq!(
+        second.agent_trace.len(),
+        first.agent_trace.len() - memory.tool_calls_saved
+    );
+    // Target-claim work and the verdict are untouched.
+    assert_eq!(calls_on(&second, RACE_CLAIM), calls_on(&first, RACE_CLAIM));
+    assert_eq!(second.risk_score, first.risk_score);
+    assert_eq!(second.risk_tier, first.risk_tier);
+    assert_eq!(second.patterns_matched.len(), first.patterns_matched.len());
+    let note = format!(
+        "Memory: 1 earlier verdict; latest {} was CRITICAL_FRAUD; this run agrees.",
+        first.certificate.certificate_id
+    );
+    assert!(second.summary_rationale.contains(&note), "{note}");
+    let json = serde_json::to_value(&second).expect("json");
+    assert_eq!(json["memory"]["prior_investigations"], 1);
+    assert_eq!(json["memory"]["tool_calls_saved"], memory.tool_calls_saved);
+
+    drop((repo, investigator));
+    drop(graph);
+}
+
+const MEMORY_RACERS: usize = 8;
+
+/// 8 re-investigations at once: the SUPERSEDES chain stays linear and each run's memory block
+/// is one consistent snapshot: its count names a real prefix of the chain, its latest verdict is
+/// the newest in that prefix, and what it skipped is what that verdict relied on.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "requires a live FalkorDB (docker compose up -d falkordb)"]
+async fn concurrent_reinvestigations_report_consistent_memory() {
+    let graph = TestGraph::new("claimgraph_memory_race_it");
+    let sessions = two_sessions(&graph).await;
+    let first = sessions[0].1.investigate(RACE_CLAIM).await.expect("first");
+    let barrier = Arc::new(tokio::sync::Barrier::new(MEMORY_RACERS));
+    let handles: Vec<_> = (0..MEMORY_RACERS)
+        .map(|n| {
+            let (investigator, barrier) = (sessions[n % 2].1.clone(), barrier.clone());
+            tokio::spawn(async move {
+                barrier.wait().await;
+                investigator.investigate(RACE_CLAIM).await
+            })
+        })
+        .collect();
+    let mut dossiers = Vec::new();
+    for handle in handles {
+        dossiers.push(handle.await.expect("task").expect("dossier"));
+    }
+    assert_linear_chain(&graph, MEMORY_RACERS + 1, "memory race").await;
+    let seen: Vec<(usize, usize)> = dossiers
+        .iter()
+        .filter_map(|d| d.memory.as_ref())
+        .map(|m| (m.prior_investigations, m.tool_calls_saved))
+        .collect();
+    println!("memory race (prior, saved): {seen:?}");
+
+    let mut oldest_first = sessions[0]
+        .0
+        .investigation_history(RACE_CLAIM)
+        .await
+        .expect("history");
+    oldest_first.reverse();
+    let relied_on = |cert: &str| {
+        let (graph, cert) = (&graph, cert.to_string());
+        async move {
+            read(
+                graph,
+                &format!(
+                    "MATCH (:Investigation {{id: '{cert}'}})-[:RELIED_ON]->(c:Claim) RETURN c.id"
+                ),
+            )
+            .await
+            .into_iter()
+            .map(|row| text(&row[0]))
+            .collect::<HashSet<_>>()
+        }
+    };
+    for dossier in &dossiers {
+        let memory = dossier.memory.as_ref().expect("memory");
+        let own = oldest_first
+            .iter()
+            .position(|r| r.certificate_id == dossier.certificate.certificate_id)
+            .expect("own verdict recorded");
+        let prior = memory.prior_investigations;
+        assert!((1..=own).contains(&prior), "prior {prior}, own index {own}");
+        assert_eq!(memory.latest_prior, oldest_first[prior - 1], "{memory:?}");
+        assert!(memory.agrees_with_latest);
+        assert_eq!(dossier.risk_score, first.risk_score);
+        let skipped: HashSet<String> = memory.skipped_corroboration.iter().cloned().collect();
+        assert!(
+            skipped.is_subset(&relied_on(&memory.latest_prior.certificate_id).await),
+            "{memory:?}"
+        );
+        let saved: usize = memory
+            .skipped_corroboration
+            .iter()
+            .map(|id| calls_on(&first, id).len())
+            .sum();
+        assert_eq!(memory.tool_calls_saved, saved, "{memory:?}");
+        assert_eq!(
+            dossier.agent_trace.len(),
+            first.agent_trace.len() - saved,
+            "{memory:?}"
+        );
+    }
+    drop(sessions);
     drop(graph);
 }
