@@ -3,13 +3,13 @@
 
 mod common;
 
-use claimgraph_backend::actions::{ActionDispatcher, Webhook};
-use claimgraph_backend::agent::{ClaimInvestigator, PlannerConfig};
-use claimgraph_backend::db::FalkorGraphRepository;
 use common::TestGraph;
+use diktiax_backend::actions::{ActionDispatcher, Webhook};
+use diktiax_backend::agent::{ClaimInvestigator, PlannerConfig};
+use diktiax_backend::db::FalkorGraphRepository;
 
 async fn setup() -> (FalkorGraphRepository, ClaimInvestigator, TestGraph) {
-    let graph = TestGraph::new("claimgraph_agent_it");
+    let graph = TestGraph::new("diktiax_agent_it");
     let repo = FalkorGraphRepository::connect(&graph.url, &graph.name)
         .await
         .expect("FalkorDB running");

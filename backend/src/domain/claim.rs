@@ -19,6 +19,30 @@ pub struct InvestigationRecord {
     pub recorded_at: String,
 }
 
+/// One verdict in a claim's SUPERSEDES chain, as investigation history returns it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ChainedVerdict {
+    #[serde(flatten)]
+    pub record: InvestigationRecord,
+    /// Certificate id of the verdict this one superseded; `None` at the root.
+    pub supersedes: Option<String>,
+    /// Claims this verdict RELIED_ON.
+    pub relied_on: Vec<String>,
+    /// 0 for the head (newest), counting back along the chain.
+    pub position: usize,
+}
+
+/// A verdict on another claim that RELIED_ON the queried claim.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EvidenceReuse {
+    pub claim_id: String,
+    pub certificate_id: String,
+    pub decision: String,
+    pub recorded_at: String,
+    /// True while no later verdict supersedes it.
+    pub is_head: bool,
+}
+
 /// What the agent remembers about a claim before re-investigating it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PriorVerdicts {

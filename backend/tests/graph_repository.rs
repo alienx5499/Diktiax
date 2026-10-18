@@ -4,9 +4,9 @@
 
 mod common;
 
-use claimgraph_backend::db::FalkorGraphRepository;
-use claimgraph_backend::domain::NewClaim;
 use common::TestGraph;
+use diktiax_backend::db::FalkorGraphRepository;
+use diktiax_backend::domain::NewClaim;
 use falkordb::{FalkorClientBuilder, FalkorConnectionInfo, FalkorValue};
 use futures_core::Stream;
 use std::pin::Pin;
@@ -16,7 +16,7 @@ const RING_LOCATION: &str = "LOC-441";
 const RING_SHOP: &str = "SHOP-801";
 
 async fn repo() -> (FalkorGraphRepository, TestGraph) {
-    let graph = TestGraph::new("claimgraph_it");
+    let graph = TestGraph::new("diktiax_it");
     let repo = FalkorGraphRepository::connect(&graph.url, &graph.name)
         .await
         .expect("FalkorDB must be running for ignored integration tests");

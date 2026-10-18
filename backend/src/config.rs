@@ -14,7 +14,7 @@ impl AppConfig {
     pub fn from_env() -> Self {
         let falkordb_url =
             env::var("FALKORDB_URL").unwrap_or_else(|_| "falkor://127.0.0.1:6379".to_string());
-        let graph_name = env::var("FALKORDB_GRAPH").unwrap_or_else(|_| "claimgraph".to_string());
+        let graph_name = env::var("FALKORDB_GRAPH").unwrap_or_else(|_| "diktiax".to_string());
         let server_port = env::var("PORT")
             .ok()
             .and_then(|p| p.parse().ok())

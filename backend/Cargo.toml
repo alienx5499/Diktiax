@@ -1,5 +1,5 @@
 [package]
-name = "claimgraph-backend"
+name = "diktiax-backend"
 version = "0.1.0"
 edition = "2021"
 authors = ["Prabal Patra <prabalpatra@users.noreply.github.com>"]

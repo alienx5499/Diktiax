@@ -24,6 +24,8 @@ pub const SHOP_CENTRALITY: &str = "shop_centrality";
 pub const INVESTIGATE_CLAIM: &str = "investigate_claim";
 /// External-only (MCP + /api/mcp): never offered to the agent's own planners.
 pub const INVESTIGATION_HISTORY: &str = "investigation_history";
+/// External-only: past verdicts on other claims that RELIED_ON a claim.
+pub const EVIDENCE_REUSE: &str = "evidence_reuse";
 pub const RING_COMPONENTS: &str = "ring_components";
 /// External-only graph-algorithm tools (algo.SPpaths, algo.pageRank, algo.labelPropagation).
 pub const CONNECTION_PATH: &str = "connection_path";
@@ -46,7 +48,12 @@ pub const MAX_INFLUENCE_LIMIT: u8 = 50;
 
 pub const DEFAULT_DEPTH: u8 = 2;
 
-fn tool(name: &str, description: &str, properties: Value, required: &[&str]) -> ToolDefinition {
+pub(super) fn tool(
+    name: &str,
+    description: &str,
+    properties: Value,
+    required: &[&str],
+) -> ToolDefinition {
     ToolDefinition {
         name: name.into(),
         description: description.into(),
@@ -68,7 +75,7 @@ fn claim_id_only(name: &str, description: &str) -> ToolDefinition {
     )
 }
 
-fn claim_id_property() -> Value {
+pub(super) fn claim_id_property() -> Value {
     json!({ "type": "string", "minLength": 1, "description": "Claim identifier, e.g. 'CLM-48291'." })
 }
 
@@ -173,9 +180,19 @@ pub fn external_tool_definitions() -> Vec<ToolDefinition> {
     let mut tools = tool_definitions();
     tools.push(claim_id_only(
         INVESTIGATION_HISTORY,
-        "Past verdicts the Diktiax agent recorded for this claim, newest first: certificate id, \
-         decision, risk score, time. Use it to continue from earlier work instead of \
-         re-investigating.",
+        "Past verdicts the Diktiax agent recorded for this claim, walked along the SUPERSEDES \
+         chain from the newest verdict back to the first. Returns [{certificate_id, decision, \
+         risk_score, recorded_at, supersedes (previous certificate id or null), relied_on \
+         (linked claim ids), position (0 = newest)}]. Use it to continue from earlier work \
+         instead of re-investigating; errors if the claim is unknown.",
+    ));
+    tools.push(claim_id_only(
+        EVIDENCE_REUSE,
+        "Which past verdicts on OTHER claims relied on this claim as evidence (RELIED_ON). \
+         Returns [{claim_id, certificate_id, decision, recorded_at, is_head (true while no newer \
+         verdict supersedes it)}] newest first, empty when nothing relied on it. Use it when a \
+         claim's standing changes, to see which verdicts leaned on it; errors if the claim is \
+         unknown.",
     ));
     tools.push(tool(
         CONNECTION_PATH,

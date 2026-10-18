@@ -45,6 +45,7 @@ Give it a claim id. The agent:
 3. **Runs Cypher detectors** for four fraud-ring patterns, then follows the evidence: shops named in a match get a centrality check, and linked claims get corroborated.
 4. **Scores** the claim from detector results only. The LLM never sets the score.
 5. **Acts**: writes the new claim status and an `Investigation` node back to the graph, freezes the payout, assigns an SIU investigator picked from the graph by specialty and workload, and optionally fires a webhook.
+6. **Hands the decision to a person.** A freeze is a hold, not a decision. The assigned investigator reviews the frozen payout (`POST /api/claims/{id}/review`, the dashboard's "Confirm fraud" / "Release payout" buttons, or the tool `review_claim` on the local stdio MCP server): `confirm_fraud` sets `CONFIRMED_FRAUD` and keeps the payout frozen, `release` sets `RELEASED_AFTER_REVIEW` and unfreezes it. One statement, `RECORD_REVIEW`, writes the `Review` node, links it to the claim's latest `Investigation` (`REVIEWS`) and to the investigator (`REVIEWED`), sets the status and frees one of the investigator's open cases. Anyone but the assigned investigator gets 403; a claim that isn't frozen or was already reviewed gets 409. A review is final: a later automated re-investigation records its verdict but keeps the reviewed status (`KEEP_REVIEWED_STATUS`; the status write checks for a `Review` in the same statement). The reviewer id is asserted by a trusted operator, not authenticated per person: in a real deployment this route sits behind SSO, and the hosted demo locks it behind the admin token (`x-admin-token`, the same policy as `/api/seed`; `/api/health` reports `review_enabled`, and without it the dashboard shows "Awaiting human review by …" instead of the buttons). `review_claim` is never offered over the public HTTP tool endpoint. Tests: [`review_confirms_or_releases_a_frozen_payout`](backend/tests/human_review.rs), [`concurrent_reviews_leave_one_review`](backend/tests/human_review.rs), [`review_constraint_rejects_a_second_review`](backend/tests/human_review.rs), [`reinvestigation_keeps_the_reviewed_status`](backend/tests/review_outcomes.rs).
 
 Every step is returned as a trace: tool, arguments, why it was chosen, what came back, and how long it took.
 
@@ -89,14 +90,43 @@ The planner explores, runs two detectors, and stops. It never calls `detect_shar
 | 8 concurrent MCP `investigate_claim` calls on a new claim run the agent once; 7 get the stored verdict | [`concurrent_mcp_investigate_claim_runs_the_agent_once`](backend/tests/agent_memory.rs) |
 | A re-run reads the last verdict, says whether it agrees, and skips corroboration it already relied on | [`second_run_remembers_and_skips_corroborated_work`](backend/tests/agent_memory.rs) |
 | 8 concurrent re-runs each report memory consistent with the chain they read | [`concurrent_reinvestigations_report_consistent_memory`](backend/tests/agent_memory.rs) |
+| History is the chain itself: 3 re-runs come back head first, each linked to the verdict it superseded, and `evidence_reuse` finds every verdict that relied on a claim | [`history_walks_the_chain_and_evidence_reuse_reads_relied_on`](backend/tests/agent_memory.rs), [`verdict_chain_reads_run_through_the_reader`](backend/tests/read_only_lane.rs) |
+| 16 concurrent reviews of one frozen payout leave one `Review`; the other 15 are refused | [`concurrent_reviews_leave_one_review`](backend/tests/human_review.rs) |
+| A re-run that disagrees with the latest verdict sends the claim to a person instead of replacing the verdict | [`disagreeing_reinvestigation_escalates_to_human_review`](backend/tests/human_review.rs) |
 
-- **Verdicts outlive the session.** Every investigation writes an `Investigation` node (certificate id, decision, risk score, time) under the claim, and re-investigating adds another one, so the graph holds the full history. `GET /api/claims/{id}/investigations` and the MCP tool `investigation_history` return it newest first. [`verdicts_survive_across_sessions`](backend/tests/agent_memory.rs) investigates a claim, drops the client, connects a new one and checks the same certificate comes back, then investigates again and gets two entries.
+- **Verdicts outlive the session.** Every investigation writes an `Investigation` node (certificate id, decision, risk score, time) under the claim, and re-investigating adds another one, so the graph holds the full history. `GET /api/claims/{id}/investigations` and the MCP tool `investigation_history` return it newest first, in chain order (see below). [`verdicts_survive_across_sessions`](backend/tests/agent_memory.rs) investigates a claim, drops the client, connects a new one and checks the same certificate comes back, then investigates again and gets two entries.
 - **Other agents pick up where Diktiax left off.** `investigation_history` is served over MCP and HTTP, so Claude or any MCP client can see what the agent already decided instead of re-running it. The agent's own planners never see this tool (a unit test checks it), so a past verdict can't stand in for fresh evidence.
 - **Memory is consumed, not just stored.** `investigate_claim` over MCP reads the claim's history first. If a verdict is already recorded it returns that verdict (`reused: true`, certificate id, decision, risk score, time) without running the agent or writing anything; `force: true` runs a fresh investigation. A per-claim lock covers the check, the run and the write, so 8 concurrent calls on a never-investigated claim run the agent once and the other 7 get the reused verdict, while calls on different claims still run in parallel ([`concurrent_mcp_investigate_claim_runs_the_agent_once`](backend/tests/agent_memory.rs)). That lock lives in one process (the hosted backend runs a single instance); with several instances two of them could both run the agent, and the verdict chain would still stay linear, because that part is a database constraint. HTTP `POST /api/investigate`, which the dashboard uses, always runs a fresh investigation, but the agent still reads its memory first: one `PRIOR_VERDICTS` read returns the verdict count, the latest verdict and the claims it `RELIED_ON`. The dossier gains a `memory` block (`prior_investigations`, `latest_prior`, `agrees_with_latest`, `skipped_corroboration`, `tool_calls_saved`), the rationale says whether this run agrees, and corroboration on claims the last verdict already relied on is skipped, whichever planner (rule-based or LLM) asked for it (rule-based on the ring claim: 9 tool calls first, 7 on a re-run; same score). Scoring never reads a past verdict. Tests: [`second_run_remembers_and_skips_corroborated_work`](backend/tests/agent_memory.rs), [`concurrent_reinvestigations_report_consistent_memory`](backend/tests/agent_memory.rs).
+
+- **Memory changes the outcome when verdicts conflict.** If a re-run reaches a different tier than the latest recorded verdict, the new verdict does not silently replace the old one. The dossier's `memory` gets `escalated: true` and an `escalation_reason`, the claim status becomes `NEEDS_REVIEW_CONFLICTING_VERDICTS`, the action log records `ESCALATE_TO_HUMAN_REVIEW`, and the memory panel shows "Conflicting verdicts: sent to human review". The tier's own freeze still runs, the claim always gets an assigned investigator (even when its tier alone would not assign one, [`escalated_conflict_always_has_an_investigator`](backend/tests/review_outcomes.rs)), and that investigator decides the claim with the review above. A claim a person already reviewed is never escalated again: its reviewed status stands. When the re-run agrees, or on a first run, nothing changes: `escalated` is omitted from the JSON. [`disagreeing_reinvestigation_escalates_to_human_review`](backend/tests/human_review.rs) investigates CLM-55104 (HIGH_SUSPICION, 75), removes the cloned-VIN edge, re-investigates (MEDIUM_RISK, 25) and checks the escalation, then has the assigned investigator review it.
 - **Memory has structure.** Each new verdict on a claim `SUPERSEDES` the previous one, so a claim's history is a single linear chain, and it links with `RELIED_ON` to the linked claims its evidence came from. Two unique constraints (`SUPERSEDES.superseded_id` and one `InvestigationChain` start marker per claim) keep the chain linear under concurrency; [`concurrent_investigations_form_one_supersedes_chain`](backend/tests/agent_memory.rs) runs 16 investigations of one claim at once and checks 16 nodes, 15 links and one head, and [`chain_constraints_reject_a_fork`](backend/tests/agent_memory.rs) forces the exact write a lost race would make and checks it is rejected with nothing left behind.
+- **History walks the chain, and `RELIED_ON` is read both ways.** `investigation_history` is one read-only query that starts at the head (the verdict nothing supersedes) and follows `SUPERSEDES*0..1000` back to the root, so the order is the chain's, not a sort on timestamps. Each entry keeps its old fields and adds `supersedes` (the previous certificate id, null at the root), `relied_on` (the linked claims its evidence came from) and `position` (0 = newest). The external-only tool `evidence_reuse` asks the reverse question: which verdicts on *other* claims relied on this one, and is each still the head of its chain? If a linked claim later turns out clean, that is the list of verdicts to revisit. Both run as the read-only user. Tests: [`history_walks_the_chain_and_evidence_reuse_reads_relied_on`](backend/tests/agent_memory.rs), [`verdict_chain_reads_run_through_the_reader`](backend/tests/read_only_lane.rs).
 - **Shared state with the SIU team.** Assigning an investigator raises their `open_cases` in the graph, and the next case goes to the investigator whose specialties best cover the matched patterns, least loaded first, so earlier investigations shape later assignments. A claim keeps its first investigator: re-investigating it reuses the existing assignment instead of picking again, so `open_cases` only rises once.
 - **Consistent under concurrency.** [`concurrent_investigations_keep_shared_state_consistent`](backend/tests/agent_memory.rs) runs 16 investigations at once (all 8 claims twice) and checks there are exactly 16 verdicts, exactly one investigator on each of the 5 flagged claims, none on the 3 clean ones, and an `open_cases` increase of exactly 5. Writing it caught a real race (two concurrent runs could assign a claim twice). FalkorDB does not document that a single read-then-write statement is serialised under concurrency, so the fix is a database constraint: one `MERGE` statement plus a unique constraint on `ASSIGNED_INVESTIGATOR.claim_id`, created at seed time and awaited until it is enforced. [`concurrent_direct_assignment_creates_one_edge`](backend/tests/agent_memory.rs) and [`concurrent_investigations_of_one_claim_assign_once`](backend/tests/agent_memory.rs) run 32 concurrent writers on one claim and always leave exactly one edge. [`without_the_constraint_concurrent_assignment_race_is_observed`](backend/tests/agent_memory.rs) drops the constraint and races the statement alone: on FalkorDB v4.22.1 it left one edge in all 60 rounds we ran (1,920 calls), so we could not reproduce a duplicate with the current single `MERGE` statement; the constraint is kept as the guarantee.
 - **Handoff between planners.** If the LLM planner fails mid-run, the rule-based planner continues from the same step history rather than starting over, and the dossier records where it took over.
+
+![Two agents, one claim: the Diktiax agent investigates and freezes over HTTP, a reviewer agent reads the memory and confirms over MCP, and the agent's re-run keeps the human decision; they never message each other](https://github.com/user-attachments/assets/94ad5fdc-d256-4169-9d8a-a31852a7f057)
+
+**Two agents, one claim (a real run).** The Diktiax agent works over HTTP; a second agent, an MCP client acting as the SIU reviewer, works over the stdio MCP server; both share one throwaway graph and never message each other. Recorded with the release binary (rule-based planner), output trimmed:
+
+```text
+[Diktiax agent, HTTP] POST /api/investigate/CLM-48291
+                      ← CRITICAL_FRAUD 100, 9 steps; assigned Omar Haddad (INV-202), payout frozen
+[reviewer, MCP]       → investigation_history {"claim_id":"CLM-48291"}
+                      ← [{"certificate_id":"CERT-80bd1260-…","decision":"CRITICAL_FRAUD","position":0,
+                          "relied_on":["CLM-39102","CLM-44730"],"supersedes":null}]
+[reviewer, MCP]       → evidence_reuse {"claim_id":"CLM-39102"}
+                      ← [{"claim_id":"CLM-48291","certificate_id":"CERT-80bd1260-…","is_head":true}]
+[reviewer, MCP]       → connection_path {"claim_a":"CLM-48291","claim_b":"CLM-39102"}
+                      ← {"hops":2,"paths":[{"nodes":["CLM-48291","MED-201","CLM-39102"]},{"nodes":["CLM-48291","SHOP-801","CLM-39102"]}]}
+[reviewer, MCP]       → review_claim {"claim_id":"CLM-48291","decision":"confirm_fraud","reviewer":"INV-202"}
+                      ← {"claim_status":"CONFIRMED_FRAUD","payout_frozen":true,"reviewer_name":"Omar Haddad"}
+[Diktiax agent, HTTP] POST /api/investigate/CLM-48291   (re-run)
+                      ← CRITICAL_FRAUD 100, 7 steps; memory: prior 1, agrees, skipped CLM-44730 and CLM-39102
+                        action: "Status kept: human review already decided (CONFIRMED_FRAUD)"
+```
+
+The agent's memory changed its work (two corroboration calls skipped), the reviewer's decision was written to the graph in one statement, and the agent's re-run respected it. `review_claim` exists only on the stdio MCP server run by an operator; over public HTTP the review route needs the admin token.
 
 A real MCP session (JSON-RPC over stdio against the `--mcp-server` binary, recorded on a throwaway graph): another agent asks for history, gets nothing, runs the investigation once, then gets the stored verdict back instead of a second run.
 
@@ -109,6 +139,17 @@ A real MCP session (JSON-RPC over stdio against the `--mcp-server` binary, recor
 ← {"reused":true,"claim_id":"CLM-48291","certificate_id":"CERT-02987df7-5d82-4c98-ba3e-9a14ae379c13","decision":"CRITICAL_FRAUD","risk_score":100,"recorded_at":"2026-10-17T21:39:00.563358+00:00"}
 → tools/call ring_components {"claim_id":"CLM-48291"}
 ← {"claim_id":"CLM-48291","claims":["CLM-39102","CLM-44730","CLM-48291"],"size":3}
+```
+
+The chain and its `RELIED_ON` links, read back after three investigations of CLM-48291 (the first plain, two with `force: true`; recorded the same way on a throwaway graph):
+
+```text
+→ tools/call investigation_history {"claim_id":"CLM-48291"}
+← [{"certificate_id":"CERT-aedc9442-1703-4a5c-a58a-2f628b5a827a","decision":"CRITICAL_FRAUD","position":0,"recorded_at":"2026-10-18T09:40:49.305404+00:00","relied_on":["CLM-39102","CLM-44730"],"risk_score":100,"supersedes":"CERT-8c32d031-3479-4e91-a4cc-9f0ac93a5e48"},{"certificate_id":"CERT-8c32d031-3479-4e91-a4cc-9f0ac93a5e48","decision":"CRITICAL_FRAUD","position":1,"recorded_at":"2026-10-18T09:40:47.292010+00:00","relied_on":["CLM-39102","CLM-44730"],"risk_score":100,"supersedes":"CERT-c769e55a-dd40-4d66-9559-545db74cd941"},{"certificate_id":"CERT-c769e55a-dd40-4d66-9559-545db74cd941","decision":"CRITICAL_FRAUD","position":2,"recorded_at":"2026-10-18T09:40:45.976057+00:00","relied_on":["CLM-39102","CLM-44730"],"risk_score":100,"supersedes":null}]
+→ tools/call evidence_reuse {"claim_id":"CLM-39102"}
+← [{"certificate_id":"CERT-aedc9442-1703-4a5c-a58a-2f628b5a827a","claim_id":"CLM-48291","decision":"CRITICAL_FRAUD","is_head":true,"recorded_at":"2026-10-18T09:40:49.305404+00:00"},{"certificate_id":"CERT-8c32d031-3479-4e91-a4cc-9f0ac93a5e48","claim_id":"CLM-48291","decision":"CRITICAL_FRAUD","is_head":false,"recorded_at":"2026-10-18T09:40:47.292010+00:00"},{"certificate_id":"CERT-c769e55a-dd40-4d66-9559-545db74cd941","claim_id":"CLM-48291","decision":"CRITICAL_FRAUD","is_head":false,"recorded_at":"2026-10-18T09:40:45.976057+00:00"}]
+→ tools/call evidence_reuse {"claim_id":"CLM-10022"}
+← []
 ```
 
 Three more graph-algorithm tools only outside agents get (recorded the same way, on a freshly seeded throwaway graph). `connection_path` runs `algo.SPpaths`; `shop_influence` runs `algo.pageRank`; `ring_communities` runs `algo.labelPropagation`:
@@ -128,7 +169,7 @@ Three more graph-algorithm tools only outside agents get (recorded the same way,
 
 Label propagation gives exactly the WCC components on the seed graph: it separates the ring from the clean claims, but the two clean pairs that share a customer address or a shop form communities too, so a community on its own is not a fraud signal. Shops and clinics end up in communities of their own, so `providers` lists the shops and clinics the community's claims used.
 
-The score never reads this history: on a re-run a past verdict can save corroboration work and is reported in the dossier's `memory` block, but it is never evidence for a new score.
+The score never reads this history: on a re-run a past verdict can save corroboration work and is reported in the dossier's `memory` block, but it is never evidence for a new score. What a past verdict can change is where the claim goes: a disagreeing re-run is held for a person (see the memory section above).
 
 ## Graph data model
 
@@ -287,7 +328,46 @@ RETURN chosen.id AS id, chosen.name AS name, chosen.specialties AS specialties,
   chosen.open_cases AS open_cases
 ```
 
-FalkorDB does not document that a single read-then-write statement is serialised under concurrency (with the constraint dropped, 1,920 racing calls of the assignment statement on v4.22.1 never left a duplicate, but that is an observation, not a guarantee), so each of these writes is backed by a unique constraint created at startup and awaited until it is enforced: `ASSIGNED_INVESTIGATOR.claim_id`, `SUPERSEDES.superseded_id` and `InvestigationChain.claim_id`. A violation rolls the statement back and it is retried.
+**Human review** (`RECORD_REVIEW` in [`backend/src/db/reviews.rs`](backend/src/db/reviews.rs)): the assigned investigator's decision on a frozen payout, in one statement. It matches only when the reviewer is the claim's assigned investigator and the claim is still held; no row back means nothing was written, and a read (`REVIEW_GATE`) explains the refusal (404, 403 or 409).
+
+```cypher
+MATCH (c:Claim {id: $claim_id})-[:ASSIGNED_INVESTIGATOR]->(inv:Investigator {id: $reviewer})
+WHERE c.status IN $reviewable
+MATCH (c)-[:HAS_INVESTIGATION]->(i:Investigation)
+WITH c, inv, i ORDER BY i.recorded_at DESC, i.id DESC LIMIT 1
+CREATE (inv)-[:REVIEWED]->(r:Review {id: $review_id, claim_id: c.id, decision: $decision,
+       reviewer: inv.id, note: $note, reviewed_at: $reviewed_at})-[:REVIEWS]->(i)
+SET c.status = $status, c.payout_frozen = $payout_frozen, inv.open_cases = inv.open_cases - 1
+RETURN r.id AS review_id, c.id AS claim_id, r.decision AS decision, inv.id AS reviewer_id,
+       inv.name AS reviewer_name, r.note AS note, r.reviewed_at AS reviewed_at,
+       i.id AS investigation_id, c.status AS claim_status, c.payout_frozen AS payout_frozen
+```
+
+FalkorDB does not document that a single read-then-write statement is serialised under concurrency (with the constraint dropped, 1,920 racing calls of the assignment statement and 1,280 racing reviews on v4.22.1 never left a duplicate, but that is an observation, not a guarantee), so each of these writes is backed by a unique constraint created at startup and awaited until it is enforced: `ASSIGNED_INVESTIGATOR.claim_id`, `SUPERSEDES.superseded_id`, `InvestigationChain.claim_id` and `Review.claim_id`. A violation rolls the statement back; the assignment and the chain write are retried, and a second review is refused with 409.
+
+**Reading memory back** (history in chain order, then the reverse `RELIED_ON` lookup). The hop bound is a literal because v4.22.1 does not accept a parameter there; verdicts recorded before chaining existed are one-entry chains listed after newer heads.
+
+```cypher
+MATCH (c:Claim {id: $claim_id})
+OPTIONAL MATCH (c)-[:HAS_INVESTIGATION]->(head:Investigation)
+WHERE NOT ()-[:SUPERSEDES]->(head)
+OPTIONAL MATCH p = (head)-[:SUPERSEDES*0..1000]->(i:Investigation)
+OPTIONAL MATCH (i)-[:SUPERSEDES]->(prev:Investigation)
+OPTIONAL MATCH (i)-[:RELIED_ON]->(l:Claim)
+WITH head.recorded_at AS head_at, head.id AS head_id, length(p) AS depth, i, prev,
+  collect(l.id) AS relied_on
+RETURN i.id AS certificate_id, i.decision AS decision, i.risk_score AS risk_score,
+  i.recorded_at AS recorded_at, prev.id AS supersedes, relied_on
+ORDER BY head_at DESC, head_id DESC, depth
+
+MATCH (target:Claim {id: $claim_id})
+OPTIONAL MATCH (c:Claim)-[:HAS_INVESTIGATION]->(i:Investigation)-[:RELIED_ON]->(target)
+WHERE c <> target
+OPTIONAL MATCH (newer:Investigation)-[:SUPERSEDES]->(i)
+RETURN c.id AS claim_id, i.id AS certificate_id, i.decision AS decision,
+  i.recorded_at AS recorded_at, newer IS NULL AS is_head
+ORDER BY recorded_at DESC, certificate_id DESC
+```
 
 Runs on FalkorDB v4.22.1, the newest release of the 4.x line, pinned for reproducible demos.
 
@@ -402,7 +482,7 @@ Entity resolution is tested too: [`ingest_merges_shared_contacts`](backend/tests
 | `algo.SPpaths` | [`queries.rs:238`](backend/src/db/queries.rs) · [`graph_algorithms.rs:135`](backend/tests/graph_algorithms.rs) | Live through the external-only `connection_path` tool: every minimal-length path (up to 5) between two claims over the WCC relationship types, any direction, at most 6 hops, read-only with the 5 s timeout. The ring claims CLM-48291 and CLM-39102 link in 2 hops, through SHOP-801 and through MED-201; the shared phone is 4 hops, so it is not on a shortest path. A clean claim (CLM-10022) has no path |
 | `algo.pageRank` (live) | [`queries.rs:252`](backend/src/db/queries.rs) · [`graph_algorithms.rs:191`](backend/tests/graph_algorithms.rs) | Live through the external-only `shop_influence` tool: repair shops and clinics ranked by whole-graph PageRank, with their claim counts. On the seed graph the ring's clinic MED-201 ranks first (0.0441) and SHOP-801 is the top repair shop (0.0238 vs 0.0214) |
 | `algo.labelPropagation` | [`queries.rs:265`](backend/src/db/queries.rs) · [`graph_algorithms.rs:239`](backend/tests/graph_algorithms.rs) | Live through the external-only `ring_communities` tool over the WCC projection, `algo.labelPropagation({nodeLabels, relationshipTypes}) YIELD node, communityId` (also `maxIterations`). Seed graph: {CLM-39102, CLM-44730, CLM-48291} with SHOP-801 and MED-201, plus the clean pairs {CLM-20417, CLM-20988} and {CLM-31205, CLM-55104}; the same split as WCC. It errors if a projected label or relationship type is missing from the graph |
-| MCP | [`backend/src/mcp`](backend/src/mcp) | The same graph tools, plus `investigation_history`, `connection_path`, `shop_influence`, `ring_communities` and `ring_components`, for Claude or any MCP client |
+| MCP | [`backend/src/mcp`](backend/src/mcp) | The same graph tools, plus `investigation_history`, `evidence_reuse`, `connection_path`, `shop_influence`, `ring_communities` and `ring_components`, for Claude or any MCP client |
 
 Graph algorithms used live: `algo.WCC` (`ring_components`, which also picks the agent's corroboration targets), `algo.SPpaths` (`connection_path`), `algo.pageRank` (`shop_influence`) and `algo.labelPropagation` (`ring_communities`), all through the read-only lane with the 5 s timeout. We also tried `algo.betweenness` and `algo.HarmonicCentrality` and dropped them: on v4.22.1 they follow edge direction only, and since claims point into shops and clinics, every provider scored 0.
 
@@ -410,7 +490,7 @@ Graph algorithms used live: `algo.WCC` (`ring_components`, which also picks the 
 
 ![Diktiax architecture: Vercel dashboard, Render container with the Rust agent and FalkorDB, Groq planner, Claude over MCP](https://github.com/user-attachments/assets/1ff17889-0d11-41e4-a3f9-9fcf21e3c726)
 
-The agent, the HTTP API and the MCP server all use the same tool catalog, so Claude calls the same graph tools the agent calls, plus five that only outside agents get: `investigate_claim`, `investigation_history`, `connection_path`, `shop_influence` and `ring_communities`. In production FalkorDB and the backend share one Render container, with FalkorDB bound to loopback; locally they run as two Docker services.
+The agent, the HTTP API and the MCP server all use the same tool catalog, so Claude calls the same graph tools the agent calls, plus six that only outside agents get: `investigate_claim`, `investigation_history`, `evidence_reuse`, `connection_path`, `shop_influence` and `ring_communities`. In production FalkorDB and the backend share one Render container, with FalkorDB bound to loopback; locally they run as two Docker services.
 
 - **Backend:** Rust 1.99 (Axum 0.8, Tokio 1.53, `falkordb` crate 0.10, reqwest 0.13 with rustls). FalkorDB v4.22.1 is the only database.
 - **Frontend:** Next.js 16.4 / React 19.3, TypeScript 6, Tailwind CSS 4, Bun. Agent trace timeline, live graph canvas, claim intake form.
@@ -449,11 +529,11 @@ Command line:
 cd backend
 cargo run --release -- --investigate CLM-48291    # prints the full dossier as JSON
 cargo run --release -- --seed                     # reset the graph (investigations write to it)
-cargo test                                        # 94 unit tests
-cargo test -- --ignored --test-threads=1          # 34 integration tests against live FalkorDB
+cargo test                                        # 100 unit tests
+cargo test -- --ignored --test-threads=1          # 43 integration tests against live FalkorDB
 ```
 
-128 Rust tests in all: 94 unit tests, and 34 integration tests that run against a real FalkorDB on a uniquely named graph and delete it afterwards.
+143 Rust tests in all: 100 unit tests, and 43 integration tests that run against a real FalkorDB on a uniquely named graph and delete it afterwards.
 
 Everything in containers: `docker compose -f docker-compose.full.yml up --build`, then open http://localhost:3000.
 
@@ -463,10 +543,10 @@ Optional environment (see [`.env.example`](.env.example)): `ANTHROPIC_API_KEY` s
 
 ```bash
 cd backend && cargo build --release
-claude mcp add diktiax -e FALKORDB_URL=falkor://127.0.0.1:6379 -- "$PWD/target/release/claimgraph-backend" --mcp-server
+claude mcp add diktiax -e FALKORDB_URL=falkor://127.0.0.1:6379 -- "$PWD/target/release/diktiax-backend" --mcp-server
 ```
 
-This exposes the 9 read-only graph tools (including `ring_components`, the claim's `algo.WCC` component), `investigation_history` (read-only, past verdicts), `connection_path` (read-only, `algo.SPpaths` between two claims), `shop_influence` (read-only, `algo.pageRank` over shops and clinics), `ring_communities` (read-only, `algo.labelPropagation` communities of claims) and `investigate_claim`, which runs the full agent and **writes to the graph**. For Claude Desktop, use the same command and args in `claude_desktop_config.json`.
+This exposes the 9 read-only graph tools (including `ring_components`, the claim's `algo.WCC` component), `investigation_history` (read-only, past verdicts in chain order), `evidence_reuse` (read-only, verdicts on other claims that relied on this one), `connection_path` (read-only, `algo.SPpaths` between two claims), `shop_influence` (read-only, `algo.pageRank` over shops and clinics), `ring_communities` (read-only, `algo.labelPropagation` communities of claims), `review_claim`, which records the assigned investigator's decision on a frozen payout and **writes to the graph**, and `investigate_claim`, which runs the full agent and **writes to the graph**. For Claude Desktop, use the same command and args in `claude_desktop_config.json`.
 
 ## Deploy
 
@@ -476,7 +556,7 @@ The backend runs on Render and the frontend on Vercel.
 
 **Vercel:** project root `frontend/`, install command `bun install`, and `NEXT_PUBLIC_API_BASE=https://<render-domain>` set *before* building (it's inlined at build time).
 
-The deployed demo is deliberately open: anyone can file and investigate claims on the synthetic graph. Only `POST /api/seed`, which wipes the graph, is locked, and it fails closed: it needs a matching `x-admin-token` header, and is refused outright if `ADMIN_TOKEN` isn't set (unless `DIKTIAX_DEV=1`, which `make run-backend` sets for local runs). Locally, Docker publishes every port on `127.0.0.1` only.
+The deployed demo is deliberately open: anyone can file and investigate claims on the synthetic graph. Only `POST /api/seed`, which wipes the graph, and `POST /api/claims/:id/review`, which decides a payout, are locked, and they fail closed: each needs a matching `x-admin-token` header, and is refused outright if `ADMIN_TOKEN` isn't set (unless `DIKTIAX_DEV=1`, which `make run-backend` sets for local runs). Locally, Docker publishes every port on `127.0.0.1` only.
 
 ## API
 
@@ -485,8 +565,10 @@ The deployed demo is deliberately open: anyone can file and investigate claims o
 | `GET /api/claims` · `POST /api/claims` | List claims · file a new claim |
 | `POST /api/investigate/:id` | Run the agent; returns score, trace, certificate, actions taken and subgraph |
 | `GET /api/graph/:id` | Subgraph for the canvas |
-| `GET /api/claims/:id/investigations` | Past verdicts for a claim, newest first (404 for an unknown claim) |
+| `GET /api/claims/:id/investigations` | Past verdicts for a claim in `SUPERSEDES`-chain order, newest first, each with `supersedes`, `relied_on` and `position` (404 for an unknown claim) |
+| `POST /api/claims/:id/review` `{"decision":"confirm_fraud"\|"release","reviewer":"INV-202","note":"optional"}` | Human review of a frozen payout by its assigned investigator; needs `x-admin-token` (local dev: `DIKTIAX_DEV=1`); returns the `Review` (403 without the token or for anyone but the assigned investigator, 409 when not frozen or already reviewed, 404 for an unknown claim) |
 | `GET /api/mcp/tools` · `POST /api/mcp/call` | The graph tool catalog over HTTP |
+| `POST /api/mcp/call` `{"name":"evidence_reuse","arguments":{"claim_id":"CLM-39102"}}` | Verdicts on other claims that `RELIED_ON` this claim, newest first, each with `claim_id`, `certificate_id`, `decision`, `recorded_at`, `is_head`; `[]` when none (404 for an unknown claim) |
 | `POST /api/mcp/call` `{"name":"ring_components","arguments":{"claim_id":"CLM-48291"}}` | Claims in the same `algo.WCC` component, e.g. `{"claim_id":"CLM-48291","claims":["CLM-39102","CLM-44730","CLM-48291"],"size":3}` (404 for an unknown claim) |
 | `POST /api/mcp/call` `{"name":"connection_path","arguments":{"claim_a":"CLM-48291","claim_b":"CLM-39102"}}` | Minimal-length `algo.SPpaths` paths between two claims (`hops` 2 here, via SHOP-801 and via MED-201); `"paths":[]` and `"hops":null` when not connected within 6 hops; 404 for an unknown claim |
 | `POST /api/mcp/call` `{"name":"shop_influence","arguments":{"limit":3}}` | Repair shops and clinics by `algo.pageRank`, highest first, each with `label`, `id`, `name`, `score`, `claims` |
@@ -494,6 +576,7 @@ The deployed demo is deliberately open: anyone can file and investigate claims o
 | `POST /api/seed` · `GET /api/health` | Reset the demo graph (needs `x-admin-token`; local dev: `DIKTIAX_DEV=1`) · health check |
 
 - `POST /api/investigate` is limited to one request per visitor every 15 s (HTTP 429 with `Retry-After`), so one visitor can't use up the LLM quota for everyone.
+- `POST /api/claims/:id/review` is limited to one request per visitor every 5 s (HTTP 429 with `Retry-After`). `review_claim` is not callable through `POST /api/mcp/call` (400, unknown tool).
 - `ring_components`, `connection_path`, `shop_influence` and `ring_communities` over HTTP (`POST /api/mcp/call`) run graph algorithms (`algo.WCC`, `algo.SPpaths`, `algo.pageRank`, `algo.labelPropagation`), so each is limited to one call per visitor every 3 s (HTTP 429 with `Retry-After`; each tool has its own bucket). Inside an investigation the agent runs `ring_components` at most once, whatever the planner asks, and never sees the other three.
 
 ## Limitations

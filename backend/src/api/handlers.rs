@@ -4,7 +4,7 @@ use super::error::ApiError;
 use super::rate_limit::visitor_key;
 use super::routes::AppState;
 use crate::agent::InvestigationDossier;
-use crate::domain::{ClaimSummary, InvestigationRecord, NewClaim, SubgraphPayload};
+use crate::domain::{ChainedVerdict, ClaimSummary, NewClaim, SubgraphPayload};
 use axum::extract::rejection::JsonRejection;
 use axum::extract::{ConnectInfo, Path, State};
 use axum::http::{HeaderMap, StatusCode};
@@ -27,6 +27,8 @@ pub async fn health(State(state): Shared) -> ApiResult<Value> {
         "evidence_lane": state.repo.evidence_lane(),
         "planner": state.investigator.planner_label(),
         "seed_enabled": seed_allowed(admin_token().as_deref(), None, dev_mode()),
+        // Same policy as seed: reviews need the admin token unless DIKTIAX_DEV=1.
+        "review_enabled": seed_allowed(admin_token().as_deref(), None, dev_mode()),
     })))
 }
 
@@ -68,7 +70,7 @@ pub async fn get_claim(State(state): Shared, Path(id): Path<String>) -> ApiResul
 pub async fn investigation_history(
     State(state): Shared,
     Path(id): Path<String>,
-) -> ApiResult<Vec<InvestigationRecord>> {
+) -> ApiResult<Vec<ChainedVerdict>> {
     state
         .repo
         .investigation_history(&id)
@@ -147,20 +149,12 @@ pub async fn mcp_call(
     body: Result<Json<McpCall>, JsonRejection>,
 ) -> ApiResult<Value> {
     let Json(call) = body?;
-    if !crate::tools::external_tool_definitions()
-        .iter()
-        .any(|t| t.name == call.name)
-    {
-        return Err(ApiError::BadRequest(format!(
-            "unknown tool '{}'",
-            call.name
-        )));
-    }
+    ensure_http_tool(&call.name)?;
+    let visitor = visitor_key(&headers, peer.map(|Extension(ConnectInfo(addr))| addr));
     // Held by the spawned query task, so a client that disconnects can't free it early.
     let mut scan_permit = None;
     if crate::tools::is_graph_scan(&call.name) {
         scan_permit = Some(scan_slot(&state.scan_slots)?);
-        let visitor = visitor_key(&headers, peer.map(|Extension(ConnectInfo(addr))| addr));
         if let Err(wait) = state
             .scan_cooldown
             .check(&format!("{}:{visitor}", call.name))
@@ -194,6 +188,19 @@ pub async fn mcp_call(
     }
 }
 
+/// Only the external catalog is callable over HTTP: `investigate_claim` and `review_claim` (which
+/// writes a person's decision) stay on the local stdio MCP server.
+fn ensure_http_tool(name: &str) -> Result<(), ApiError> {
+    if crate::tools::external_tool_definitions()
+        .iter()
+        .any(|t| t.name == name)
+    {
+        Ok(())
+    } else {
+        Err(ApiError::BadRequest(format!("unknown tool '{name}'")))
+    }
+}
+
 /// A free graph-scan slot, or 429 with `Retry-After: 1` when every slot is busy.
 fn scan_slot(slots: &Arc<Semaphore>) -> Result<OwnedSemaphorePermit, ApiError> {
     Arc::clone(slots)
@@ -204,16 +211,16 @@ fn scan_slot(slots: &Arc<Semaphore>) -> Result<OwnedSemaphorePermit, ApiError> {
         })
 }
 
-fn admin_token() -> Option<String> {
+pub(super) fn admin_token() -> Option<String> {
     std::env::var("ADMIN_TOKEN").ok().filter(|t| !t.is_empty())
 }
 
-fn dev_mode() -> bool {
+pub(super) fn dev_mode() -> bool {
     std::env::var("DIKTIAX_DEV").is_ok_and(|v| v == "1")
 }
 
 /// Single seed policy shared by `seed` and `health` (which advertises it as `seed_enabled`).
-fn seed_allowed(expected: Option<&str>, provided: Option<&str>, dev: bool) -> bool {
+pub(super) fn seed_allowed(expected: Option<&str>, provided: Option<&str>, dev: bool) -> bool {
     match expected {
         None => dev,
         Some(token) => provided == Some(token),
@@ -222,7 +229,7 @@ fn seed_allowed(expected: Option<&str>, provided: Option<&str>, dev: bool) -> bo
 
 #[cfg(test)]
 mod tests {
-    use super::{scan_slot, seed_allowed, ApiError};
+    use super::{ensure_http_tool, scan_slot, seed_allowed, ApiError};
     use tokio::sync::Semaphore;
 
     #[test]
@@ -238,6 +245,22 @@ mod tests {
         }
         drop(first);
         assert!(scan_slot(&slots).is_ok(), "a finished scan frees its slot");
+    }
+
+    #[test]
+    fn writing_tools_are_not_callable_over_http() {
+        let http = crate::tools::external_tool_definitions();
+        for name in ["review_claim", "investigate_claim"] {
+            assert!(
+                http.iter().all(|t| t.name != name),
+                "{name} listed over HTTP"
+            );
+            assert!(matches!(
+                ensure_http_tool(name),
+                Err(ApiError::BadRequest(_))
+            ));
+        }
+        assert!(ensure_http_tool("investigation_history").is_ok());
     }
 
     #[test]

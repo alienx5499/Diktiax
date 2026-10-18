@@ -1,6 +1,8 @@
 //! FalkorDB row/value -> domain entity conversion. Every conversion error is propagated.
 
-use crate::domain::{ClaimSummary, GraphEdge, GraphNode, InvestigationRecord};
+use crate::domain::{
+    ChainedVerdict, ClaimSummary, EvidenceReuse, GraphEdge, GraphNode, InvestigationRecord,
+};
 use falkordb::{Edge, FalkorValue, FromFalkorValue, Node, Row};
 use std::collections::HashMap;
 
@@ -28,7 +30,8 @@ pub fn claim_summary(row: &Row) -> Result<ClaimSummary, String> {
     })
 }
 
-/// `None` for the all-null row INVESTIGATION_HISTORY returns for a claim with no investigations.
+/// `None` for the all-null row PRIOR_VERDICTS or INVESTIGATION_HISTORY returns for a claim with
+/// no investigations.
 pub fn investigation_record(row: &Row) -> Result<Option<InvestigationRecord>, String> {
     let Some(certificate_id) = col::<Option<String>>(row, "certificate_id")? else {
         return Ok(None);
@@ -38,6 +41,33 @@ pub fn investigation_record(row: &Row) -> Result<Option<InvestigationRecord>, St
         decision: col(row, "decision")?,
         risk_score: col(row, "risk_score")?,
         recorded_at: col(row, "recorded_at")?,
+    }))
+}
+
+/// One INVESTIGATION_HISTORY row; `None` for the all-null row of a never-investigated claim.
+pub fn chained_verdict(row: &Row, position: usize) -> Result<Option<ChainedVerdict>, String> {
+    let Some(record) = investigation_record(row)? else {
+        return Ok(None);
+    };
+    Ok(Some(ChainedVerdict {
+        record,
+        supersedes: col(row, "supersedes")?,
+        relied_on: col(row, "relied_on")?,
+        position,
+    }))
+}
+
+/// One EVIDENCE_REUSE row; `None` for the all-null row of a claim nothing relied on.
+pub fn evidence_reuse(row: &Row) -> Result<Option<EvidenceReuse>, String> {
+    let Some(certificate_id) = col::<Option<String>>(row, "certificate_id")? else {
+        return Ok(None);
+    };
+    Ok(Some(EvidenceReuse {
+        claim_id: col(row, "claim_id")?,
+        certificate_id,
+        decision: col(row, "decision")?,
+        recorded_at: col(row, "recorded_at")?,
+        is_head: col(row, "is_head")?,
     }))
 }
 

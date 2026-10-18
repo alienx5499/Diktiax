@@ -1,18 +1,19 @@
 //! Investigation memory: verdict history, the chained Investigation write and RELIED_ON links.
 
-use super::mapping::{col, investigation_record, text};
+use super::mapping::{chained_verdict, col, evidence_reuse, investigation_record, text};
 use super::queries;
 use super::repository::FalkorGraphRepository;
-use crate::domain::{InvestigationRecord, PriorVerdicts};
+use crate::domain::{ChainedVerdict, EvidenceReuse, PriorVerdicts};
 use chrono::Utc;
 use falkordb::FalkorValue;
 
 impl FalkorGraphRepository {
-    /// Past verdicts for a claim, newest first; empty when never investigated.
+    /// Past verdicts for a claim in SUPERSEDES-chain order, head first; empty when never
+    /// investigated.
     pub async fn investigation_history(
         &self,
         claim_id: &str,
-    ) -> Result<Vec<InvestigationRecord>, String> {
+    ) -> Result<Vec<ChainedVerdict>, String> {
         let rows = self
             .read_rows(
                 queries::INVESTIGATION_HISTORY,
@@ -22,8 +23,23 @@ impl FalkorGraphRepository {
         if rows.is_empty() {
             return Err(format!("claim {claim_id} not found"));
         }
+        // Row index is chain position: the only filtered row is the lone all-null one.
         rows.iter()
-            .filter_map(|row| investigation_record(row).transpose())
+            .enumerate()
+            .filter_map(|(position, row)| chained_verdict(row, position).transpose())
+            .collect()
+    }
+
+    /// Verdicts on other claims that RELIED_ON this one, newest first; errors for an unknown claim.
+    pub async fn evidence_reuse(&self, claim_id: &str) -> Result<Vec<EvidenceReuse>, String> {
+        let rows = self
+            .read_rows(queries::EVIDENCE_REUSE, vec![("claim_id", text(claim_id))])
+            .await?;
+        if rows.is_empty() {
+            return Err(format!("claim {claim_id} not found"));
+        }
+        rows.iter()
+            .filter_map(|row| evidence_reuse(row).transpose())
             .collect()
     }
 

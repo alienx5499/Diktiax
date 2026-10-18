@@ -4,7 +4,10 @@
 use super::webhook::{Webhook, WebhookOutcome};
 use crate::db::FalkorGraphRepository;
 use crate::domain::evaluator::FraudRiskAssessment;
-use crate::domain::{ClaimSummary, FraudPatternMatch, ProvenanceCertificate};
+use crate::domain::{
+    ClaimSummary, FraudPatternMatch, ProvenanceCertificate, ReviewDecision,
+    CONFLICTING_VERDICTS_STATUS,
+};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -79,24 +82,49 @@ impl ActionDispatcher {
         Self { repo, webhook }
     }
 
+    /// `conflict`: why this verdict disagrees with the claim's latest one. The claim then goes
+    /// to human review (CONFLICTING_VERDICTS_STATUS) instead of taking the tier's status, and
+    /// gets an assigned investigator; the tier's freeze still applies. A claim a person already
+    /// reviewed keeps its reviewed status: only the Investigation is recorded.
     pub async fn dispatch(
         &self,
         claim: &ClaimSummary,
         assessment: &FraudRiskAssessment,
         patterns: &[FraudPatternMatch],
         certificate: &ProvenanceCertificate,
+        conflict: Option<&str>,
     ) -> Result<DispatchOutcome, String> {
         let id = claim.claim_id.as_str();
-        let (status, escalate) = status_for(&assessment.risk_tier);
+        let (tier_status, escalate) = status_for(&assessment.risk_tier);
+        let status = conflict.map_or(tier_status, |_| CONFLICTING_VERDICTS_STATUS);
         let mut log = Vec::new();
 
-        self.repo.set_claim_status(id, status).await?;
-        log.push(record(
-            id,
-            "SET_CLAIM_STATUS",
-            format!("Claim status {} -> {status}", claim.status),
-            "CONFIRMED",
-        ));
+        // A person's review is final: the status write is skipped, in the same statement, when
+        // the claim already has a Review, and nothing else is frozen, assigned or escalated.
+        let kept = self.repo.set_status_unless_reviewed(id, status).await?;
+        match &kept {
+            None => log.push(record(
+                id,
+                "SET_CLAIM_STATUS",
+                format!("Claim status {} -> {status}", claim.status),
+                "CONFIRMED",
+            )),
+            Some(decided) => log.push(record(
+                id,
+                "KEEP_REVIEWED_STATUS",
+                format!("Status kept: human review already decided ({decided})"),
+                "CONFIRMED",
+            )),
+        }
+        let conflict = conflict.filter(|_| kept.is_none());
+        if let Some(reason) = conflict {
+            log.push(record(
+                id,
+                "ESCALATE_TO_HUMAN_REVIEW",
+                format!("Conflicting verdicts, sent to human review: {reason}"),
+                "CONFIRMED",
+            ));
+        }
         self.repo
             .record_investigation(
                 id,
@@ -125,7 +153,22 @@ impl ActionDispatcher {
             webhook_target: "skipped: claim not escalated".into(),
             actions_log: Vec::new(),
         };
+        if let Some(decided) = kept {
+            result.payout_frozen = decided == ReviewDecision::ConfirmFraud.claim_status();
+            result.frozen_amount = if result.payout_frozen {
+                claim.amount
+            } else {
+                0.0
+            };
+            result.webhook_target = "skipped: human review already decided".into();
+            result.actions_log = log;
+            return Ok(DispatchOutcome {
+                claim_status: decided,
+                remediation: result,
+            });
+        }
 
+        let names: Vec<String> = patterns.iter().map(|p| p.pattern_name.clone()).collect();
         if escalate {
             result.payout_frozen = true;
             result.frozen_amount = claim.amount;
@@ -142,35 +185,12 @@ impl ActionDispatcher {
                 "[ACTION] {id}: payout {:.2} frozen, status {status}",
                 claim.amount
             );
-
-            let names: Vec<String> = patterns.iter().map(|p| p.pattern_name.clone()).collect();
-            match self.repo.assign_once(id, &names).await? {
-                Some(assigned) => {
-                    log.push(record(
-                        id,
-                        "ASSIGN_INVESTIGATOR",
-                        format!(
-                            "Assigned {} ({}) - specialties: {}; open cases now {}",
-                            assigned.name,
-                            assigned.id,
-                            assigned.specialties.join(", "),
-                            assigned.open_cases
-                        ),
-                        "CONFIRMED",
-                    ));
-                    info!("[ACTION] {id}: assigned investigator {}", assigned.id);
-                    result.assigned_investigator = assigned.name;
-                    result.investigator_role =
-                        format!("SIU investigator ({})", assigned.specialties.join(", "));
-                }
-                None => log.push(record(
-                    id,
-                    "ASSIGN_INVESTIGATOR",
-                    "No Investigator nodes in the graph".into(),
-                    "FAILED",
-                )),
-            }
-
+        }
+        // A claim held for conflicting verdicts always gets an investigator to review it.
+        if escalate || conflict.is_some() {
+            self.assign(id, &names, &mut log, &mut result).await?;
+        }
+        if escalate {
             let payload = json!({
                 "claim_id": id,
                 "status": status,
@@ -207,6 +227,43 @@ impl ActionDispatcher {
             claim_status: status.to_string(),
             remediation: result,
         })
+    }
+
+    /// The claim's investigator (existing assignment, else the best pick), logged on `result`.
+    async fn assign(
+        &self,
+        id: &str,
+        names: &[String],
+        log: &mut Vec<ActionRecord>,
+        result: &mut TriageRemediationResult,
+    ) -> Result<(), String> {
+        match self.repo.assign_once(id, names).await? {
+            Some(assigned) => {
+                log.push(record(
+                    id,
+                    "ASSIGN_INVESTIGATOR",
+                    format!(
+                        "Assigned {} ({}) - specialties: {}; open cases now {}",
+                        assigned.name,
+                        assigned.id,
+                        assigned.specialties.join(", "),
+                        assigned.open_cases
+                    ),
+                    "CONFIRMED",
+                ));
+                info!("[ACTION] {id}: assigned investigator {}", assigned.id);
+                result.assigned_investigator = assigned.name;
+                result.investigator_role =
+                    format!("SIU investigator ({})", assigned.specialties.join(", "));
+            }
+            None => log.push(record(
+                id,
+                "ASSIGN_INVESTIGATOR",
+                "No Investigator nodes in the graph".into(),
+                "FAILED",
+            )),
+        }
+        Ok(())
     }
 }
 

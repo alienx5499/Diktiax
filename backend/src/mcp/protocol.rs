@@ -1,7 +1,10 @@
 //! Pure JSON-RPC 2.0 / MCP message routing. Classifies one inbound line and builds every
 //! response that does not need the graph; tool execution is left to the caller (`stdio.rs`).
 
-use crate::tools::{external_tool_definitions, investigate_claim_definition, ToolDefinition};
+use crate::tools::{
+    external_tool_definitions, investigate_claim_definition, review_claim_definition,
+    ToolDefinition,
+};
 use serde_json::{json, Map, Value};
 
 pub const LATEST_PROTOCOL_VERSION: &str = "2025-06-18";
@@ -17,12 +20,14 @@ const INSTRUCTIONS: &str =
     "Diktiax exposes a FalkorDB insurance-claim knowledge graph. Start with \
     get_claim, run the detect_* tools to test specific fraud-ring patterns, use list_claim_shops + \
     shop_centrality for repair-shop hubs, explore_claim_subgraph for raw context, \
-    investigation_history to continue from verdicts recorded in earlier sessions, \
+    investigation_history to continue from verdicts recorded in earlier sessions (in \
+    SUPERSEDES-chain order), evidence_reuse for verdicts on other claims that relied on a claim, \
     ring_components for the whole ring a claim belongs to, connection_path for how two claims \
     are linked, shop_influence for repair shops and clinics ranked by PageRank, \
     ring_communities for label-propagation communities of claims, or \
     investigate_claim for a full autonomous verdict (an already recorded verdict is returned \
-    with reused: true unless force is set).";
+    with reused: true unless force is set), or review_claim to decide a frozen payout as the \
+    claim's assigned investigator.";
 
 /// What to do with one inbound line.
 #[derive(Debug, Clone, PartialEq)]
@@ -66,11 +71,11 @@ fn mcp_tool(def: ToolDefinition) -> Value {
     json!({ "name": def.name, "description": def.description, "inputSchema": def.input_schema })
 }
 
-/// External catalog plus the MCP-only `investigate_claim` tool.
+/// External catalog plus the stdio-only `investigate_claim` and `review_claim` tools.
 pub fn list_tools() -> Value {
     let tools: Vec<Value> = external_tool_definitions()
         .into_iter()
-        .chain(std::iter::once(investigate_claim_definition()))
+        .chain([investigate_claim_definition(), review_claim_definition()])
         .map(mcp_tool)
         .collect();
     json!({ "tools": tools })
@@ -268,10 +273,10 @@ mod tests {
     }
 
     #[test]
-    fn tools_list_has_fourteen_tools_with_strict_schemas() {
+    fn tools_list_has_sixteen_tools_with_strict_schemas() {
         let r = respond(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#);
         let tools = r["result"]["tools"].as_array().cloned().unwrap_or_default();
-        assert_eq!(tools.len(), 14);
+        assert_eq!(tools.len(), 16);
         let investigate = tools.iter().find(|t| t["name"] == "investigate_claim");
         let schema = investigate.map(|t| t["inputSchema"].clone());
         assert_eq!(
@@ -300,6 +305,7 @@ mod tests {
             .unwrap_or_default();
         for name in [
             "investigation_history",
+            "evidence_reuse",
             "connection_path",
             "shop_influence",
             "ring_communities",
@@ -308,6 +314,12 @@ mod tests {
             assert!(mcp.iter().any(|t| t["name"] == name), "{name}");
             assert!(external_tool_definitions().iter().any(|t| t.name == name));
         }
+        // Writes a person's decision: stdio MCP only, never the HTTP tool endpoint.
+        assert!(mcp.iter().any(|t| t["name"] == "review_claim"));
+        assert!(planner.iter().all(|t| t.name != "review_claim"));
+        assert!(external_tool_definitions()
+            .iter()
+            .all(|t| t.name != "review_claim"));
         assert_eq!(planner.len(), 9, "planner catalog unchanged");
         // The WCC tool is planner-visible, so external agents get it through the shared catalog.
         assert!(planner.iter().any(|t| t.name == "ring_components"));

@@ -156,7 +156,13 @@ impl ClaimInvestigator {
 
         let dispatched = self
             .dispatcher
-            .dispatch(&claim, &assessment, &patterns, &certificate)
+            .dispatch(
+                &claim,
+                &assessment,
+                &patterns,
+                &certificate,
+                memory.as_ref().and_then(|m| m.escalation_reason.as_deref()),
+            )
             .await?;
         let subgraph = self.repo.claim_subgraph(claim_id, 3).await?;
         // Written after the dossier subgraph is read, so a first investigation's subgraph is

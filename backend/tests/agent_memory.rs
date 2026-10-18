@@ -4,12 +4,12 @@
 
 mod common;
 
-use claimgraph_backend::actions::{status_for, ActionDispatcher, Webhook};
-use claimgraph_backend::agent::{ClaimInvestigator, InvestigationDossier, PlannerConfig};
-use claimgraph_backend::db::queries::ASSIGNMENT_CONSTRAINT;
-use claimgraph_backend::db::FalkorGraphRepository;
-use claimgraph_backend::mcp::InvestigateClaim;
 use common::TestGraph;
+use diktiax_backend::actions::{status_for, ActionDispatcher, Webhook};
+use diktiax_backend::agent::{ClaimInvestigator, InvestigationDossier, PlannerConfig};
+use diktiax_backend::db::queries::ASSIGNMENT_CONSTRAINT;
+use diktiax_backend::db::FalkorGraphRepository;
+use diktiax_backend::mcp::InvestigateClaim;
 use falkordb::{
     ConstraintType, EntityType, FalkorAsyncClient, FalkorClientBuilder, FalkorConnectionInfo,
     FalkorValue,
@@ -34,7 +34,7 @@ async fn session(graph: &TestGraph) -> (FalkorGraphRepository, ClaimInvestigator
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "requires a live FalkorDB (docker compose up -d falkordb)"]
 async fn verdicts_survive_across_sessions() {
-    let graph = TestGraph::new("claimgraph_memory_it");
+    let graph = TestGraph::new("diktiax_memory_it");
 
     let first_certificate = {
         let (repo, investigator) = session(&graph).await;
@@ -57,9 +57,9 @@ async fn verdicts_survive_across_sessions() {
         .await
         .expect("history");
     assert_eq!(history.len(), 1, "{history:?}");
-    assert_eq!(history[0].decision, "CRITICAL_FRAUD");
-    assert_eq!(history[0].risk_score, 100);
-    assert_eq!(history[0].certificate_id, first_certificate);
+    assert_eq!(history[0].record.decision, "CRITICAL_FRAUD");
+    assert_eq!(history[0].record.risk_score, 100);
+    assert_eq!(history[0].record.certificate_id, first_certificate);
 
     let second = investigator.investigate("CLM-48291").await.expect("again");
     let history = repo
@@ -67,10 +67,16 @@ async fn verdicts_survive_across_sessions() {
         .await
         .expect("history");
     assert_eq!(history.len(), 2, "{history:?}");
-    assert_eq!(history[0].certificate_id, second.certificate.certificate_id);
-    assert_eq!(history[1].certificate_id, first_certificate);
-    assert_ne!(history[0].certificate_id, history[1].certificate_id);
-    assert!(history[0].recorded_at > history[1].recorded_at);
+    assert_eq!(
+        history[0].record.certificate_id,
+        second.certificate.certificate_id
+    );
+    assert_eq!(history[1].record.certificate_id, first_certificate);
+    assert_ne!(
+        history[0].record.certificate_id,
+        history[1].record.certificate_id
+    );
+    assert!(history[0].record.recorded_at > history[1].record.recorded_at);
 
     let missing = repo
         .investigation_history("CLM-NOPE")
@@ -129,7 +135,7 @@ const OPEN_CASES: &str = "MATCH (i:Investigator) RETURN i.id, i.open_cases";
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "requires a live FalkorDB (docker compose up -d falkordb)"]
 async fn concurrent_investigations_keep_shared_state_consistent() {
-    let graph = TestGraph::new("claimgraph_concurrency_it");
+    let graph = TestGraph::new("diktiax_concurrency_it");
     let (repo, investigator) = session(&graph).await;
     repo.seed(true).await.expect("seed");
     let before = read_counts(&graph, OPEN_CASES).await;
@@ -218,7 +224,7 @@ async fn concurrent_investigations_keep_shared_state_consistent() {
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "requires a live FalkorDB (docker compose up -d falkordb)"]
 async fn sequential_reinvestigation_reuses_the_assignment() {
-    let graph = TestGraph::new("claimgraph_reassign_it");
+    let graph = TestGraph::new("diktiax_reassign_it");
     let (repo, investigator) = session(&graph).await;
     repo.seed(true).await.expect("seed");
     let before = read_counts(&graph, OPEN_CASES).await;
@@ -275,7 +281,7 @@ async fn race_outcome(graph: &TestGraph, before: &HashMap<String, i64>) -> (i64,
 #[ignore = "requires a live FalkorDB (docker compose up -d falkordb)"]
 async fn concurrent_direct_assignment_creates_one_edge() {
     let names = vec!["Collusion Ring".to_string()];
-    let graph = TestGraph::new("claimgraph_assign_race_it");
+    let graph = TestGraph::new("diktiax_assign_race_it");
     let mut repos = Vec::new();
     for _ in 0..2 {
         repos.push(
@@ -340,7 +346,7 @@ async fn has_assignment_constraint(client: &FalkorAsyncClient, graph: &TestGraph
 #[ignore = "requires a live FalkorDB (docker compose up -d falkordb)"]
 async fn without_the_constraint_concurrent_assignment_race_is_observed() {
     let names = vec!["Collusion Ring".to_string()];
-    let graph = TestGraph::new("claimgraph_assign_dup_it");
+    let graph = TestGraph::new("diktiax_assign_dup_it");
     let mut repos = Vec::new();
     for _ in 0..2 {
         repos.push(
@@ -414,7 +420,7 @@ async fn without_the_constraint_concurrent_assignment_race_is_observed() {
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "requires a live FalkorDB (docker compose up -d falkordb)"]
 async fn concurrent_investigations_of_one_claim_assign_once() {
-    let graph = TestGraph::new("claimgraph_same_claim_it");
+    let graph = TestGraph::new("diktiax_same_claim_it");
     let (repo, investigator) = session(&graph).await;
     repo.seed(true).await.expect("seed");
     let before = read_counts(&graph, OPEN_CASES).await;
@@ -459,7 +465,7 @@ async fn concurrent_investigations_of_one_claim_assign_once() {
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "requires a live FalkorDB (docker compose up -d falkordb)"]
 async fn assignment_constraint_rejects_a_second_edge() {
-    let graph = TestGraph::new("claimgraph_assign_guard_it");
+    let graph = TestGraph::new("diktiax_assign_guard_it");
     let (repo, _) = session(&graph).await;
     repo.seed(true).await.expect("seed");
     let info: FalkorConnectionInfo = graph.url.as_str().try_into().expect("url");
@@ -518,7 +524,7 @@ fn is_reused(response: &Value) -> bool {
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "requires a live FalkorDB (docker compose up -d falkordb)"]
 async fn mcp_investigate_claim_reuses_the_verdict_unless_forced() {
-    let graph = TestGraph::new("claimgraph_mcp_reuse_it");
+    let graph = TestGraph::new("diktiax_mcp_reuse_it");
     let (repo, _) = session(&graph).await;
     repo.seed(true).await.expect("seed");
     let tool = mcp_tool(&graph).await;
@@ -584,7 +590,7 @@ const MCP_RACERS: usize = 8;
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "requires a live FalkorDB (docker compose up -d falkordb)"]
 async fn concurrent_mcp_investigate_claim_runs_the_agent_once() {
-    let graph = TestGraph::new("claimgraph_mcp_race_it");
+    let graph = TestGraph::new("diktiax_mcp_race_it");
     let (repo, _) = session(&graph).await;
     repo.seed(true).await.expect("seed");
     let tool = Arc::new(mcp_tool(&graph).await);
@@ -619,7 +625,7 @@ async fn concurrent_mcp_investigate_claim_runs_the_agent_once() {
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "requires a live FalkorDB (docker compose up -d falkordb)"]
 async fn concurrent_mcp_investigate_claim_on_different_claims_each_run() {
-    let graph = TestGraph::new("claimgraph_mcp_parallel_it");
+    let graph = TestGraph::new("diktiax_mcp_parallel_it");
     let (repo, _) = session(&graph).await;
     repo.seed(true).await.expect("seed");
     let tool = Arc::new(mcp_tool(&graph).await);
@@ -751,7 +757,7 @@ async fn two_sessions(graph: &TestGraph) -> Vec<(FalkorGraphRepository, ClaimInv
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "requires a live FalkorDB (docker compose up -d falkordb)"]
 async fn concurrent_investigations_form_one_supersedes_chain() {
-    let graph = TestGraph::new("claimgraph_chain_it");
+    let graph = TestGraph::new("diktiax_chain_it");
     let sessions = two_sessions(&graph).await;
     let barrier = std::sync::Arc::new(tokio::sync::Barrier::new(CHAIN_RACERS));
     let handles: Vec<_> = (0..CHAIN_RACERS)
@@ -776,7 +782,7 @@ async fn concurrent_investigations_form_one_supersedes_chain() {
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "requires a live FalkorDB (docker compose up -d falkordb)"]
 async fn concurrent_records_form_one_supersedes_chain() {
-    let graph = TestGraph::new("claimgraph_chain_direct_it");
+    let graph = TestGraph::new("diktiax_chain_direct_it");
     let sessions = two_sessions(&graph).await;
     for round in 0..RACE_ROUNDS {
         sessions[0].0.seed(true).await.expect("seed");
@@ -806,7 +812,7 @@ async fn concurrent_records_form_one_supersedes_chain() {
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "requires a live FalkorDB (docker compose up -d falkordb)"]
 async fn reinvestigation_supersedes_and_relies_on_linked_claims() {
-    let graph = TestGraph::new("claimgraph_memory_edges_it");
+    let graph = TestGraph::new("diktiax_memory_edges_it");
     let (repo, investigator) = session(&graph).await;
     repo.seed(true).await.expect("seed");
     let relied_on = |cert: String| {
@@ -861,6 +867,65 @@ async fn reinvestigation_supersedes_and_relies_on_linked_claims() {
     drop(graph);
 }
 
+/// History walks the SUPERSEDES chain head first with each verdict's RELIED_ON claims, and
+/// evidence_reuse reads RELIED_ON backwards: CLM-39102 lists the CLM-48291 verdicts on it.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "requires a live FalkorDB (docker compose up -d falkordb)"]
+async fn history_walks_the_chain_and_evidence_reuse_reads_relied_on() {
+    let graph = TestGraph::new("diktiax_memory_chain_it");
+    let (repo, investigator) = session(&graph).await;
+    repo.seed(true).await.expect("seed");
+    let mut certs = Vec::new();
+    for _ in 0..3 {
+        let dossier = investigator.investigate(RACE_CLAIM).await.expect("dossier");
+        certs.push(dossier.certificate.certificate_id);
+    }
+    certs.reverse(); // newest first
+
+    let history = repo
+        .investigation_history(RACE_CLAIM)
+        .await
+        .expect("history");
+    let ids: Vec<&str> = history
+        .iter()
+        .map(|v| v.record.certificate_id.as_str())
+        .collect();
+    assert_eq!(ids, certs, "chain order is newest first");
+    for (position, verdict) in history.iter().enumerate() {
+        assert_eq!(verdict.position, position);
+        let older = history
+            .get(position + 1)
+            .map(|v| v.record.certificate_id.clone());
+        assert_eq!(verdict.supersedes, older, "{verdict:?}");
+    }
+    assert!(
+        history[0].relied_on.iter().any(|id| id == "CLM-39102"),
+        "{history:?}"
+    );
+
+    let reuse = repo.evidence_reuse("CLM-39102").await.expect("reuse");
+    let reuse_ids: Vec<&str> = reuse.iter().map(|r| r.certificate_id.as_str()).collect();
+    assert_eq!(reuse_ids, certs, "{reuse:?}");
+    assert!(reuse
+        .iter()
+        .all(|r| r.claim_id == RACE_CLAIM && r.decision == "CRITICAL_FRAUD"));
+    let heads: Vec<bool> = reuse.iter().map(|r| r.is_head).collect();
+    assert_eq!(heads, [true, false, false]);
+    assert!(repo
+        .evidence_reuse("CLM-10022")
+        .await
+        .expect("none")
+        .is_empty());
+    let missing = repo
+        .evidence_reuse("CLM-NOPE")
+        .await
+        .expect_err("unknown claim");
+    assert!(missing.contains("not found"), "{missing}");
+
+    drop((repo, investigator));
+    drop(graph);
+}
+
 /// Runs a write statement through a client separate from the repository.
 async fn write(graph: &TestGraph, query: &str) {
     let info: FalkorConnectionInfo = graph.url.as_str().try_into().expect("url");
@@ -887,7 +952,7 @@ async fn total_investigation_count(graph: &TestGraph) -> FalkorValue {
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "requires a live FalkorDB (docker compose up -d falkordb)"]
 async fn chain_constraints_reject_a_fork() {
-    let graph = TestGraph::new("claimgraph_chain_guard_it");
+    let graph = TestGraph::new("diktiax_chain_guard_it");
     let (repo, _) = session(&graph).await;
     repo.seed(true).await.expect("seed");
 
@@ -946,7 +1011,7 @@ fn calls_on<'a>(dossier: &'a InvestigationDossier, claim_id: &str) -> Vec<&'a st
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "requires a live FalkorDB (docker compose up -d falkordb)"]
 async fn first_run_has_no_memory_and_unchanged_steps() {
-    let graph = TestGraph::new("claimgraph_memory_first_it");
+    let graph = TestGraph::new("diktiax_memory_first_it");
     let (repo, investigator) = session(&graph).await;
     repo.seed(true).await.expect("seed");
     for (claim_id, steps) in FIRST_RUN_STEPS {
@@ -971,7 +1036,7 @@ async fn first_run_has_no_memory_and_unchanged_steps() {
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "requires a live FalkorDB (docker compose up -d falkordb)"]
 async fn second_run_remembers_and_skips_corroborated_work() {
-    let graph = TestGraph::new("claimgraph_memory_second_it");
+    let graph = TestGraph::new("diktiax_memory_second_it");
     let (repo, investigator) = session(&graph).await;
     repo.seed(true).await.expect("seed");
 
@@ -1028,7 +1093,7 @@ const MEMORY_RACERS: usize = 8;
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "requires a live FalkorDB (docker compose up -d falkordb)"]
 async fn concurrent_reinvestigations_report_consistent_memory() {
-    let graph = TestGraph::new("claimgraph_memory_race_it");
+    let graph = TestGraph::new("diktiax_memory_race_it");
     let sessions = two_sessions(&graph).await;
     let first = sessions[0].1.investigate(RACE_CLAIM).await.expect("first");
     let barrier = Arc::new(tokio::sync::Barrier::new(MEMORY_RACERS));
@@ -1053,11 +1118,14 @@ async fn concurrent_reinvestigations_report_consistent_memory() {
         .collect();
     println!("memory race (prior, saved): {seen:?}");
 
-    let mut oldest_first = sessions[0]
+    let mut oldest_first: Vec<_> = sessions[0]
         .0
         .investigation_history(RACE_CLAIM)
         .await
-        .expect("history");
+        .expect("history")
+        .into_iter()
+        .map(|v| v.record)
+        .collect();
     oldest_first.reverse();
     let relied_on = |cert: &str| {
         let (graph, cert) = (&graph, cert.to_string());

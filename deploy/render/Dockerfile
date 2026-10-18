@@ -15,10 +15,10 @@ RUN touch src/lib.rs src/main.rs && cargo build --release
 FROM falkordb/falkordb:v4.22.1
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates \
     && rm -rf /var/lib/apt/lists/*
-COPY --from=builder /app/backend/target/release/claimgraph-backend /usr/local/bin/diktiax-backend
+COPY --from=builder /app/backend/target/release/diktiax-backend /usr/local/bin/diktiax-backend
 COPY deploy/render/start.sh /usr/local/bin/start.sh
 RUN chmod +x /usr/local/bin/start.sh
-ENV HOST=0.0.0.0 PORT=10000 FALKORDB_URL=falkor://127.0.0.1:6379 FALKORDB_GRAPH=claimgraph
+ENV HOST=0.0.0.0 PORT=10000 FALKORDB_URL=falkor://127.0.0.1:6379 FALKORDB_GRAPH=diktiax
 # Unprivileged: redis and the backend both run as uid 10001; redis writes only to /tmp.
 USER 10001:10001
 EXPOSE 10000

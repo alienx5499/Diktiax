@@ -6,6 +6,7 @@ mod investigators;
 mod mapping;
 pub mod queries;
 mod repository;
+mod reviews;
 mod seed;
 
 pub use detectors::GHOST_WINDOW_DAYS;

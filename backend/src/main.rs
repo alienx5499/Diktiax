@@ -1,15 +1,16 @@
-use claimgraph_backend::actions::{ActionDispatcher, Webhook};
-use claimgraph_backend::agent::{ClaimInvestigator, ClaudeConfig, OpenAiConfig, PlannerConfig};
-use claimgraph_backend::api::{
+use diktiax_backend::actions::{ActionDispatcher, Webhook};
+use diktiax_backend::agent::{ClaimInvestigator, ClaudeConfig, OpenAiConfig, PlannerConfig};
+use diktiax_backend::api::{
     create_router, AppState, Cooldown, GRAPH_SCAN_COOLDOWN_SECS, MAX_CONCURRENT_GRAPH_SCANS,
+    REVIEW_COOLDOWN_SECS,
 };
-use claimgraph_backend::config::AppConfig;
-use claimgraph_backend::db::{FalkorGraphRepository, READER_USER};
-use claimgraph_backend::mcp;
+use diktiax_backend::config::AppConfig;
+use diktiax_backend::db::{FalkorGraphRepository, READER_USER};
+use diktiax_backend::mcp;
 use std::net::SocketAddr;
 use tracing::info;
 
-const USAGE: &str = "usage: claimgraph-backend [--seed | --investigate <CLAIM_ID> | --mcp-server]";
+const USAGE: &str = "usage: diktiax-backend [--seed | --investigate <CLAIM_ID> | --mcp-server]";
 
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -17,7 +18,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "claimgraph_backend=info,tower_http=info".into()),
+                .unwrap_or_else(|_| "diktiax_backend=info,tower_http=info".into()),
         )
         .with_writer(std::io::stderr)
         .init();
@@ -65,6 +66,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 investigator,
                 investigate_cooldown: Cooldown::from_env(),
                 scan_cooldown: Cooldown::new(GRAPH_SCAN_COOLDOWN_SECS),
+                review_cooldown: Cooldown::new(REVIEW_COOLDOWN_SECS),
                 scan_slots: std::sync::Arc::new(tokio::sync::Semaphore::new(
                     MAX_CONCURRENT_GRAPH_SCANS,
                 )),

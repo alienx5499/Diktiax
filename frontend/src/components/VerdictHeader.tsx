@@ -1,12 +1,13 @@
 import React from 'react';
 import { InvestigationDossier } from '@/lib/api';
 import { Lock, Unlock, UserCheck } from 'lucide-react';
+import { ReviewControls } from '@/components/ReviewControls';
 
 /** Same thresholds EvidenceCard uses for its decision badge. */
 export const riskColour = (score: number) =>
   score >= 70 ? 'bg-[#D02020] text-white' : score >= 40 ? 'bg-[#F0C020] text-[#121212]' : 'bg-[#1040C0] text-white';
 
-export function VerdictHeader({ dossier }: { dossier: InvestigationDossier }) {
+export function VerdictHeader({ dossier, reviewEnabled }: { dossier: InvestigationDossier; reviewEnabled: boolean }) {
   const { remediation: r } = dossier;
   return (
     <div
@@ -56,6 +57,8 @@ export function VerdictHeader({ dossier }: { dossier: InvestigationDossier }) {
           {r.investigator_role && <p className="text-xs font-mono font-bold uppercase">{r.investigator_role}</p>}
         </div>
       </div>
+
+      <ReviewControls key={dossier.certificate.certificate_id} dossier={dossier} enabled={reviewEnabled} />
     </div>
   );
 }

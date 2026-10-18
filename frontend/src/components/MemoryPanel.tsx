@@ -46,6 +46,15 @@ export function MemoryPanel({ history, memory }: MemoryPanelProps) {
             Memory: {memory.agrees_with_latest ? 'agrees with' : 'differs from'} the earlier verdict{' '}
             <span className="font-mono">{shortCert(memory.latest_prior.certificate_id)}</span>
           </p>
+          {memory.escalated && (
+            <p
+              data-testid="memory-escalated"
+              className="text-xs font-mono font-black uppercase bg-[#F0C020] px-2 py-1 border-2 border-[#121212]"
+              title={memory.escalation_reason}
+            >
+              Conflicting verdicts: sent to human review
+            </p>
+          )}
           {skipped > 0 && (
             <p className="text-xs font-mono font-bold">
               Skipped {skipped} corroboration check{skipped === 1 ? '' : 's'} already covered

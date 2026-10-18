@@ -3,8 +3,8 @@
 
 mod common;
 
-use claimgraph_backend::db::FalkorGraphRepository;
 use common::TestGraph;
+use diktiax_backend::db::FalkorGraphRepository;
 use falkordb::{FalkorClientBuilder, FalkorConnectionInfo, FalkorValue};
 use futures_core::Stream;
 use std::pin::Pin;
@@ -21,7 +21,7 @@ const PAGERANK: &str = "CALL algo.pageRank(null, null) YIELD node, score \
 
 /// Seeds a fresh test graph and returns all rows of a read-only query against it.
 async fn seeded_rows(query: &str) -> Vec<Vec<FalkorValue>> {
-    let graph = TestGraph::new("claimgraph_algo");
+    let graph = TestGraph::new("diktiax_algo");
     FalkorGraphRepository::connect(&graph.url, &graph.name)
         .await
         .expect("FalkorDB must be running for ignored integration tests")
@@ -98,13 +98,13 @@ async fn pagerank_ranks_the_ring_shop_first() {
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "requires a live FalkorDB (docker compose up -d falkordb)"]
 async fn ring_components_tool_returns_the_ghost_ring() {
-    let graph = TestGraph::new("claimgraph_ring_it");
+    let graph = TestGraph::new("diktiax_ring_it");
     let repo = FalkorGraphRepository::connect(&graph.url, &graph.name)
         .await
         .expect("FalkorDB must be running for ignored integration tests");
     repo.seed(true).await.expect("seed");
 
-    let result = claimgraph_backend::tools::execute_external_tool(
+    let result = diktiax_backend::tools::execute_external_tool(
         &repo,
         "ring_components",
         &serde_json::json!({ "claim_id": "CLM-48291" }),
@@ -133,7 +133,7 @@ async fn ring_components_tool_returns_the_ghost_ring() {
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "requires a live FalkorDB (docker compose up -d falkordb)"]
 async fn connection_path_links_ring_claims_only() {
-    let graph = TestGraph::new("claimgraph_path_it");
+    let graph = TestGraph::new("diktiax_path_it");
     let repo = FalkorGraphRepository::connect(&graph.url, &graph.name)
         .await
         .expect("FalkorDB must be running for ignored integration tests");
@@ -142,7 +142,7 @@ async fn connection_path_links_ring_claims_only() {
         let repo = repo.clone();
         async move {
             let args = serde_json::json!({ "claim_a": a, "claim_b": b });
-            claimgraph_backend::tools::execute_external_tool(&repo, "connection_path", &args).await
+            diktiax_backend::tools::execute_external_tool(&repo, "connection_path", &args).await
         }
     };
 
@@ -189,13 +189,13 @@ async fn connection_path_links_ring_claims_only() {
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "requires a live FalkorDB (docker compose up -d falkordb)"]
 async fn shop_influence_ranks_the_ring_providers_first() {
-    let graph = TestGraph::new("claimgraph_influence_it");
+    let graph = TestGraph::new("diktiax_influence_it");
     let repo = FalkorGraphRepository::connect(&graph.url, &graph.name)
         .await
         .expect("FalkorDB must be running for ignored integration tests");
     repo.seed(true).await.expect("seed");
 
-    let ranked = claimgraph_backend::tools::execute_external_tool(
+    let ranked = diktiax_backend::tools::execute_external_tool(
         &repo,
         "shop_influence",
         &serde_json::json!({ "limit": 3 }),
@@ -237,7 +237,7 @@ async fn shop_influence_ranks_the_ring_providers_first() {
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "requires a live FalkorDB (docker compose up -d falkordb)"]
 async fn ring_communities_separate_the_ring() {
-    let graph = TestGraph::new("claimgraph_lpa_it");
+    let graph = TestGraph::new("diktiax_lpa_it");
     let repo = FalkorGraphRepository::connect(&graph.url, &graph.name)
         .await
         .expect("FalkorDB must be running for ignored integration tests");
@@ -245,7 +245,7 @@ async fn ring_communities_separate_the_ring() {
     let call = |args: serde_json::Value| {
         let repo = repo.clone();
         async move {
-            claimgraph_backend::tools::execute_external_tool(&repo, "ring_communities", &args).await
+            diktiax_backend::tools::execute_external_tool(&repo, "ring_communities", &args).await
         }
     };
     // Community ids are FalkorDB-internal, so compare everything else.

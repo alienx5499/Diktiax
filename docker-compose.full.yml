@@ -28,7 +28,7 @@ services:
       - "127.0.0.1:${BACKEND_HOST_PORT:-3001}:3001"
     environment:
       FALKORDB_URL: falkor://falkordb:6379
-      FALKORDB_GRAPH: ${FALKORDB_GRAPH:-claimgraph}
+      FALKORDB_GRAPH: ${FALKORDB_GRAPH:-diktiax}
       HOST: 0.0.0.0
       PORT: "3001"
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}

@@ -18,9 +18,9 @@ FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --system --uid 10001 --no-create-home diktiax
-COPY --from=builder /app/backend/target/release/claimgraph-backend /usr/local/bin/diktiax-backend
+COPY --from=builder /app/backend/target/release/diktiax-backend /usr/local/bin/diktiax-backend
 
 USER diktiax
-ENV HOST=0.0.0.0 PORT=3001 FALKORDB_URL=falkor://falkordb:6379 FALKORDB_GRAPH=claimgraph
+ENV HOST=0.0.0.0 PORT=3001 FALKORDB_URL=falkor://falkordb:6379 FALKORDB_GRAPH=diktiax
 EXPOSE 3001
 ENTRYPOINT ["diktiax-backend"]

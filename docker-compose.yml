@@ -2,7 +2,7 @@ services:
   # FalkorDB: the graph database Diktiax reads and writes
   falkordb:
     image: falkordb/falkordb:v4.22.1
-    container_name: claimgraph-falkordb
+    container_name: diktiax-falkordb
     ports:
       # Loopback only: FalkorDB has no password in local dev, so never publish it on all interfaces.
       - "127.0.0.1:6379:6379"
@@ -19,7 +19,7 @@ services:
   # Served on 3002 because the Diktiax frontend uses 3000.
   falkordb-browser:
     image: falkordb/falkordb-browser:latest
-    container_name: claimgraph-browser
+    container_name: diktiax-browser
     profiles: ["browser"]
     ports:
       - "127.0.0.1:3002:3000"

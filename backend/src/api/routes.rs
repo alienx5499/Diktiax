@@ -2,6 +2,7 @@
 
 use super::handlers;
 use super::rate_limit::Cooldown;
+use super::review;
 use crate::agent::ClaimInvestigator;
 use crate::db::FalkorGraphRepository;
 use axum::routing::{get, post};
@@ -23,6 +24,8 @@ pub struct AppState {
     /// Server-wide cap on graph scans in flight over HTTP, so many visitors together can't
     /// tie up FalkorDB either.
     pub scan_slots: Arc<Semaphore>,
+    /// Per-visitor cooldown on human reviews (`POST /api/claims/{id}/review`).
+    pub review_cooldown: Cooldown,
 }
 
 pub fn create_router(state: AppState) -> Router {
@@ -42,6 +45,7 @@ pub fn create_router(state: AppState) -> Router {
             "/api/claims/{id}/investigations",
             get(handlers::investigation_history),
         )
+        .route("/api/claims/{id}/review", post(review::review_claim))
         .route("/api/investigate/{id}", post(handlers::investigate))
         .route("/api/graph/{id}", get(handlers::graph))
         .route("/api/seed", post(handlers::seed))

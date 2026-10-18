@@ -4,11 +4,11 @@
 
 mod common;
 
-use claimgraph_backend::actions::{status_for, ActionDispatcher, Webhook};
-use claimgraph_backend::agent::{ClaimInvestigator, PlannerConfig};
-use claimgraph_backend::db::FalkorGraphRepository;
-use claimgraph_backend::domain::NewClaim;
 use common::TestGraph;
+use diktiax_backend::actions::{status_for, ActionDispatcher, Webhook};
+use diktiax_backend::agent::{ClaimInvestigator, PlannerConfig};
+use diktiax_backend::db::FalkorGraphRepository;
+use diktiax_backend::domain::NewClaim;
 
 const SEEDED_FRAUD: [&str; 5] = [
     "CLM-48291",
@@ -69,7 +69,7 @@ struct Group {
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "requires a live FalkorDB (docker compose up -d falkordb)"]
 async fn per_claim_rules_vs_graph_agent() {
-    let graph = TestGraph::new("claimgraph_baseline");
+    let graph = TestGraph::new("diktiax_baseline");
     let repo = FalkorGraphRepository::connect(&graph.url, &graph.name)
         .await
         .expect("FalkorDB running");

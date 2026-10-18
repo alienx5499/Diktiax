@@ -127,12 +127,18 @@ export interface InvestigationDossier {
   memory?: InvestigationMemory;
 }
 
-/** One entry of GET /api/claims/{id}/investigations (newest first). */
+/** One entry of GET /api/claims/{id}/investigations (SUPERSEDES-chain order, newest first). */
 export interface InvestigationRecord {
   certificate_id: string;
   decision: string;
   risk_score: number;
   recorded_at: string;
+  /** History only: certificate id of the verdict this one superseded, null at the root. */
+  supersedes?: string | null;
+  /** History only: linked claim ids this verdict relied on. */
+  relied_on?: string[];
+  /** History only: 0 = newest. */
+  position?: number;
 }
 
 export interface InvestigationMemory {
@@ -141,6 +147,25 @@ export interface InvestigationMemory {
   agrees_with_latest: boolean;
   skipped_corroboration: string[];
   tool_calls_saved: number;
+  /** Present (true) only when this run's tier differs from the latest verdict. */
+  escalated?: boolean;
+  escalation_reason?: string;
+}
+
+export type ReviewDecision = 'confirm_fraud' | 'release';
+
+/** Response of POST /api/claims/{id}/review. */
+export interface ReviewRecord {
+  review_id: string;
+  claim_id: string;
+  decision: ReviewDecision;
+  reviewer_id: string;
+  reviewer_name: string;
+  note?: string;
+  reviewed_at: string;
+  investigation_id: string;
+  claim_status: string;
+  payout_frozen: boolean;
 }
 
 export const API_BASE = process.env.NEXT_PUBLIC_API_BASE || 'http://127.0.0.1:3001';
@@ -204,17 +229,25 @@ export interface BackendHealth {
   latencyMs: number;
   /** True only when POST /api/seed is allowed without an admin token (DIKTIAX_DEV=1). */
   seedEnabled: boolean;
+  /** True only when POST /api/claims/{id}/review is allowed without an admin token. */
+  reviewEnabled: boolean;
 }
 
 export async function checkBackendHealth(): Promise<BackendHealth> {
   const start = performance.now();
   try {
-    const h = await request<{ seed_enabled?: boolean }>('/api/health', {}, 1500);
+    const h = await request<{ seed_enabled?: boolean; review_enabled?: boolean }>('/api/health', {}, 1500);
     const latencyMs = Math.round(performance.now() - start);
-    return { online: true, message: `Backend live (${latencyMs}ms)`, latencyMs, seedEnabled: h.seed_enabled === true };
+    return {
+      online: true,
+      message: `Backend live (${latencyMs}ms)`,
+      latencyMs,
+      seedEnabled: h.seed_enabled === true,
+      reviewEnabled: h.review_enabled === true,
+    };
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Backend unavailable';
-    return { online: false, message, latencyMs: Math.round(performance.now() - start), seedEnabled: false };
+    return { online: false, message, latencyMs: Math.round(performance.now() - start), seedEnabled: false, reviewEnabled: false };
   }
 }
 
@@ -228,5 +261,12 @@ export const investigateClaim = (claimId: string) =>
 
 export const fetchInvestigationHistory = (claimId: string) =>
   request<InvestigationRecord[]>(`/api/claims/${encodeURIComponent(claimId)}/investigations`, {}, 15000);
+
+export const reviewClaim = (claimId: string, decision: ReviewDecision, reviewer: string) =>
+  request<ReviewRecord>(
+    `/api/claims/${encodeURIComponent(claimId)}/review`,
+    { method: 'POST', headers: JSON_HEADERS, body: JSON.stringify({ decision, reviewer }) },
+    15000,
+  );
 
 export const seedDatabase = () => request<{ status: string; message: string }>('/api/seed', { method: 'POST' });

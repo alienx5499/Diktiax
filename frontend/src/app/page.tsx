@@ -46,6 +46,7 @@ export default function Home() {
   const [isReseeding, setIsReseeding] = useState<boolean>(false);
   const [engineOnline, setEngineOnline] = useState<boolean>(false);
   const [seedEnabled, setSeedEnabled] = useState<boolean>(false);
+  const [reviewEnabled, setReviewEnabled] = useState<boolean>(false);
   const [activePattern, setActivePattern] = useState<string | null>(null);
   // True until the first claims request settles: covers a cold-starting backend.
   const [booting, setBooting] = useState<boolean>(true);
@@ -110,7 +111,10 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
-    checkBackendHealth().then((h) => setSeedEnabled(h.seedEnabled));
+    checkBackendHealth().then((h) => {
+      setSeedEnabled(h.seedEnabled);
+      setReviewEnabled(h.reviewEnabled);
+    });
     fetchClaims()
       .then(
         (list) => {
@@ -232,7 +236,7 @@ export default function Home() {
         {dossier && (
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-start">
             <div className="lg:col-span-2">
-              <VerdictHeader dossier={dossier} />
+              <VerdictHeader dossier={dossier} reviewEnabled={reviewEnabled} />
             </div>
             <MemoryPanel history={history?.claimId === dossier.claim_id ? history.records : null} memory={dossier.memory} />
           </div>

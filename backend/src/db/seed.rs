@@ -11,10 +11,11 @@ use tracing::info;
 const SEED_CYPHER: &str = include_str!("../../../data/seed.cypher");
 
 /// Unique constraints every graph must carry before agents write to it: `(entity, (label, property))`.
-const UNIQUE_CONSTRAINTS: [(EntityType, (&str, &str)); 3] = [
+const UNIQUE_CONSTRAINTS: [(EntityType, (&str, &str)); 4] = [
     (EntityType::Edge, queries::ASSIGNMENT_CONSTRAINT),
     (EntityType::Edge, queries::SUPERSEDES_CONSTRAINT),
     (EntityType::Node, queries::CHAIN_ROOT_CONSTRAINT),
+    (EntityType::Node, queries::REVIEW_CONSTRAINT),
 ];
 
 /// Readiness wait for a unique constraint, used for both a fresh and an existing constraint.

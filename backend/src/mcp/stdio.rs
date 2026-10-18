@@ -6,7 +6,7 @@ use super::protocol::{route_line, tool_result, Route};
 use crate::agent::ClaimInvestigator;
 use crate::db::FalkorGraphRepository;
 use crate::tools::execute_external_tool;
-use crate::tools::INVESTIGATE_CLAIM;
+use crate::tools::{review_claim, INVESTIGATE_CLAIM, REVIEW_CLAIM};
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tracing::{info, warn};
@@ -21,6 +21,9 @@ impl McpContext {
     async fn call_tool(&self, name: &str, arguments: &Value) -> Result<Value, String> {
         if name == INVESTIGATE_CLAIM {
             return self.investigate.call(arguments).await;
+        }
+        if name == REVIEW_CLAIM {
+            return review_claim(&self.repo, arguments).await;
         }
         execute_external_tool(&self.repo, name, arguments).await
     }

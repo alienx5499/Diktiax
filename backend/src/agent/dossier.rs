@@ -50,6 +50,12 @@ pub struct InvestigationMemory {
     /// Linked claims not re-checked because the latest prior verdict already RELIED_ON them.
     pub skipped_corroboration: Vec<String>,
     pub tool_calls_saved: usize,
+    /// True when this run's tier differs from the latest verdict: the claim goes to a person
+    /// instead of the new verdict silently replacing the old one. Omitted when false.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub escalated: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub escalation_reason: Option<String>,
 }
 
 impl InvestigationMemory {
@@ -66,9 +72,19 @@ impl InvestigationMemory {
                 claims.push(id.to_string());
             }
         }
+        let agrees = prior.latest.decision == decision;
+        let escalation_reason = (!agrees).then(|| {
+            format!(
+                "This run reached {decision} but the latest verdict {} was {}; conflicting \
+                 verdicts are sent to human review instead of replacing the earlier one.",
+                prior.latest.certificate_id, prior.latest.decision
+            )
+        });
         Some(Self {
             prior_investigations: prior.count,
-            agrees_with_latest: prior.latest.decision == decision,
+            agrees_with_latest: agrees,
+            escalated: !agrees,
+            escalation_reason,
             latest_prior: prior.latest,
             skipped_corroboration: claims,
             tool_calls_saved: skipped.len(),
@@ -89,6 +105,9 @@ impl InvestigationMemory {
                 "differs"
             },
         );
+        if self.escalated {
+            note.push_str(" Conflicting verdicts: sent to human review.");
+        }
         if self.tool_calls_saved > 0 {
             note.push_str(&format!(
                 " Skipped {} corroboration call(s) on {} (already relied on by {}).",

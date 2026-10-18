@@ -112,7 +112,7 @@ def main():
     embed = lambda texts: [v.tolist() for v in model.encode(texts, normalize_embeddings=True)]
     db = FalkorDB.from_url(os.environ.get("FALKORDB_URL", "redis://localhost:6379"))
     name = f"vector_baseline_{uuid.uuid4().hex[:8]}"
-    assert name != "claimgraph"
+    assert name != "diktiax"
     g = db.select_graph(name)
     try:
         # Seed graph + constructed claims, so WCC sees the same data the backend would.

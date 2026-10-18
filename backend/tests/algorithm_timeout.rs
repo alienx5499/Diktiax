@@ -7,8 +7,8 @@
 
 mod common;
 
-use claimgraph_backend::db::queries;
 use common::TestGraph;
+use diktiax_backend::db::queries;
 use falkordb::{FalkorClientBuilder, FalkorConnectionInfo, FalkorValue};
 use std::time::Instant;
 
@@ -31,7 +31,7 @@ const LINK: &str = "UNWIND range(1, 20000) AS i \
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "requires a live FalkorDB (docker compose up -d falkordb)"]
 async fn algorithm_queries_obey_the_read_timeout() {
-    let graph = TestGraph::new("claimgraph_timeout_it");
+    let graph = TestGraph::new("diktiax_timeout_it");
     let info: FalkorConnectionInfo = graph.url.as_str().try_into().expect("url");
     let client = FalkorClientBuilder::new_async()
         .with_connection_info(info)

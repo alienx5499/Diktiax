@@ -3,6 +3,7 @@
 
 mod catalog;
 mod execute;
+mod review;
 
 pub use catalog::{
     external_tool_definitions, is_graph_scan, tool_definitions, ToolDefinition, CONNECTION_PATH,
@@ -13,3 +14,4 @@ pub use catalog::{
 pub(crate) use catalog::{investigate_claim_definition, INVESTIGATE_CLAIM};
 pub(crate) use execute::required_str;
 pub use execute::{execute_external_tool, execute_tool};
+pub(crate) use review::{review_claim, review_claim_definition, REVIEW_CLAIM};

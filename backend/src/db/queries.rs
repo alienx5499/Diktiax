@@ -164,12 +164,35 @@ pub const LINK_RELIED_ON: &str = "MATCH (i:Investigation {id: $investigation_id}
      CREATE (i)-[:RELIED_ON]->(l) \
      RETURN count(l) AS linked";
 
-/// Every recorded verdict for a claim, newest first. An unknown claim yields no rows; a known
-/// claim with no investigations yields one row of nulls (OPTIONAL MATCH).
+/// Every recorded verdict for a claim, walked along the SUPERSEDES chain from the head (the
+/// verdict nothing supersedes) back to the root, with the verdict each one supersedes and the
+/// claims it RELIED_ON. Chain order is newest first, since each run supersedes the head it
+/// read. Verdicts recorded before chaining existed are heads of one-entry chains, listed after
+/// newer heads. `*0..1000` is a literal bound (a parameter is not accepted there on v4.22.1).
+/// An unknown claim yields no rows; a known claim with no investigations yields one row of
+/// nulls (OPTIONAL MATCH). Scalars and lists only, so it runs through the read-only lane.
 pub const INVESTIGATION_HISTORY: &str = "MATCH (c:Claim {id: $claim_id}) \
-     OPTIONAL MATCH (c)-[:HAS_INVESTIGATION]->(i:Investigation) \
+     OPTIONAL MATCH (c)-[:HAS_INVESTIGATION]->(head:Investigation) \
+     WHERE NOT ()-[:SUPERSEDES]->(head) \
+     OPTIONAL MATCH p = (head)-[:SUPERSEDES*0..1000]->(i:Investigation) \
+     OPTIONAL MATCH (i)-[:SUPERSEDES]->(prev:Investigation) \
+     OPTIONAL MATCH (i)-[:RELIED_ON]->(l:Claim) \
+     WITH head.recorded_at AS head_at, head.id AS head_id, length(p) AS depth, i, prev, \
+     collect(l.id) AS relied_on \
      RETURN i.id AS certificate_id, i.decision AS decision, i.risk_score AS risk_score, \
-     i.recorded_at AS recorded_at \
+     i.recorded_at AS recorded_at, prev.id AS supersedes, relied_on \
+     ORDER BY head_at DESC, head_id DESC, depth";
+
+/// Verdicts on OTHER claims that RELIED_ON `$claim_id`, newest first, each flagged `is_head`
+/// when no later verdict supersedes it. An unknown claim yields no rows; a claim nothing
+/// relied on yields one row of nulls. (`exists()` over a pattern always reported false here
+/// on v4.22.1, hence the OPTIONAL MATCH for the superseding verdict.)
+pub const EVIDENCE_REUSE: &str = "MATCH (target:Claim {id: $claim_id}) \
+     OPTIONAL MATCH (c:Claim)-[:HAS_INVESTIGATION]->(i:Investigation)-[:RELIED_ON]->(target) \
+     WHERE c <> target \
+     OPTIONAL MATCH (newer:Investigation)-[:SUPERSEDES]->(i) \
+     RETURN c.id AS claim_id, i.id AS certificate_id, i.decision AS decision, \
+     i.recorded_at AS recorded_at, newer IS NULL AS is_head \
      ORDER BY recorded_at DESC, certificate_id DESC";
 
 /// The agent's memory of a claim in ONE statement (one consistent snapshot): how many verdicts
@@ -272,3 +295,6 @@ pub const RING_COMMUNITIES: &str =
      WITH communityId, claims, \
      collect(DISTINCT CASE WHEN p IS NULL THEN NULL ELSE [labels(p)[0], p.id] END) AS providers \
      RETURN communityId AS community_id, claims, providers";
+
+/// Unique `(label, property)`: at most one Review per claim.
+pub const REVIEW_CONSTRAINT: (&str, &str) = ("Review", "claim_id");

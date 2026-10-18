@@ -50,7 +50,8 @@ impl InvestigateClaim {
 
     async fn investigate_or_reuse(&self, claim_id: &str, force: bool) -> Result<Value, String> {
         if !force {
-            if let Some(latest) = self.repo.investigation_history(claim_id).await?.first() {
+            if let Some(head) = self.repo.investigation_history(claim_id).await?.first() {
+                let latest = &head.record;
                 return Ok(json!({
                     "reused": true,
                     "claim_id": claim_id,

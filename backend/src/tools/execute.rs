@@ -157,6 +157,10 @@ pub async fn execute_external_tool(
             let claim_id = required_str(args, "claim_id")?;
             to_json(repo.investigation_history(&claim_id).await?)
         }
+        catalog::EVIDENCE_REUSE => {
+            let claim_id = required_str(args, "claim_id")?;
+            to_json(repo.evidence_reuse(&claim_id).await?)
+        }
         catalog::CONNECTION_PATH => {
             let (a, b) = claim_pair(args)?;
             to_json(repo.connection_path(&a, &b).await?)
@@ -197,6 +201,8 @@ mod tests {
     #[test]
     fn agent_loop_cannot_parse_external_only_tools() {
         assert!(parse_call(catalog::INVESTIGATION_HISTORY, &json!({ "claim_id": "C" })).is_err());
+        assert!(parse_call(catalog::EVIDENCE_REUSE, &json!({ "claim_id": "C" })).is_err());
+        assert!(!catalog::is_graph_scan(catalog::EVIDENCE_REUSE));
         let pair = json!({ "claim_a": "A", "claim_b": "B" });
         assert!(parse_call(catalog::CONNECTION_PATH, &pair).is_err());
         assert!(parse_call(catalog::SHOP_INFLUENCE, &json!({})).is_err());

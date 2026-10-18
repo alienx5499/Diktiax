@@ -4,8 +4,10 @@
 
 mod common;
 
-use claimgraph_backend::db::{FalkorGraphRepository, LANE_READ_ONLY, LANE_SHARED};
 use common::TestGraph;
+use diktiax_backend::actions::{ActionDispatcher, Webhook};
+use diktiax_backend::agent::{ClaimInvestigator, PlannerConfig};
+use diktiax_backend::db::{FalkorGraphRepository, LANE_READ_ONLY, LANE_SHARED};
 use falkordb::FalkorConnectionInfo;
 
 fn redis_info(url: &str) -> redis::ConnectionInfo {
@@ -36,7 +38,7 @@ impl Drop for AclUser {
 }
 
 async fn seeded() -> (FalkorGraphRepository, TestGraph) {
-    let graph = TestGraph::new("claimgraph_acl");
+    let graph = TestGraph::new("diktiax_acl");
     let repo = FalkorGraphRepository::connect(&graph.url, &graph.name)
         .await
         .expect("FalkorDB must be running for ignored integration tests");
@@ -97,7 +99,7 @@ async fn reader_user_is_denied_writes_and_delete() {
             "CREATE (:Claim {id: 'CLM-WRITE-PROBE'})",
         ][..],
         &["GRAPH.DELETE", name][..],
-        &["GRAPH.RO_QUERY", "claimgraph", "RETURN 1"][..],
+        &["GRAPH.RO_QUERY", "diktiax", "RETURN 1"][..],
     ] {
         let err = run(args)
             .exec_async(&mut reader)
@@ -142,6 +144,54 @@ async fn graph_algorithms_run_through_the_reader() {
     assert_eq!(repo.ring_component("CLM-48291").await.expect("WCC").size, 3);
     let path = repo.connection_path("CLM-48291", "CLM-39102").await;
     assert_eq!(path.expect("SPpaths").hops, Some(2));
+}
+
+/// Chain-ordered history and evidence_reuse return scalars and lists only, so they run as the
+/// reader; verdicts are written through the main client.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "requires a live FalkorDB (docker compose up -d falkordb)"]
+async fn verdict_chain_reads_run_through_the_reader() {
+    let (repo, graph) = seeded().await;
+    let user = AclUser {
+        url: graph.url.clone(),
+        name: format!("diktiax_reader_it_{}", uuid::Uuid::new_v4().simple()),
+    };
+    let password = uuid::Uuid::new_v4().simple().to_string();
+    let repo = repo
+        .with_read_only_lane(&graph.url, &user.name, &password)
+        .await;
+    assert_eq!(repo.evidence_lane(), LANE_READ_ONLY);
+    let dispatcher = ActionDispatcher::new(repo.clone(), Webhook::new(None).expect("client"));
+    let investigator = ClaimInvestigator::new(repo.clone(), dispatcher, PlannerConfig::RuleBased);
+    for _ in 0..3 {
+        investigator
+            .investigate("CLM-48291")
+            .await
+            .expect("dossier");
+    }
+
+    let history = repo
+        .investigation_history("CLM-48291")
+        .await
+        .expect("history");
+    assert_eq!(history.len(), 3);
+    assert_eq!(
+        history[0].supersedes.as_ref(),
+        Some(&history[1].record.certificate_id)
+    );
+    assert_eq!(
+        history[1].supersedes.as_ref(),
+        Some(&history[2].record.certificate_id)
+    );
+    assert_eq!(
+        (history[2].position, history[2].supersedes.as_ref()),
+        (2, None)
+    );
+    assert!(history[0].relied_on.iter().any(|id| id == "CLM-39102"));
+    let reuse = repo.evidence_reuse("CLM-39102").await.expect("reuse");
+    assert_eq!(reuse.len(), 3);
+    assert_eq!(reuse[0].certificate_id, history[0].record.certificate_id);
+    assert_eq!(reuse.iter().filter(|r| r.is_head).count(), 1);
 }
 
 #[tokio::test(flavor = "multi_thread")]

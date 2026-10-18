@@ -13,11 +13,11 @@
 
 mod common;
 
-use claimgraph_backend::actions::{status_for, ActionDispatcher, Webhook};
-use claimgraph_backend::agent::{ClaimInvestigator, PlannerConfig};
-use claimgraph_backend::db::FalkorGraphRepository;
-use claimgraph_backend::domain::NewClaim;
 use common::TestGraph;
+use diktiax_backend::actions::{status_for, ActionDispatcher, Webhook};
+use diktiax_backend::agent::{ClaimInvestigator, PlannerConfig};
+use diktiax_backend::db::FalkorGraphRepository;
+use diktiax_backend::domain::NewClaim;
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::time::Instant;

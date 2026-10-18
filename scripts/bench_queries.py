@@ -1,10 +1,10 @@
 """Server-side latency of every graph tool query, as published in the README.
 
 Seed a separate graph first (never benchmark the dev graph):
-    FALKORDB_GRAPH=diktiax_bench backend/target/release/claimgraph-backend --seed
+    FALKORDB_GRAPH=diktiax_bench backend/target/release/diktiax-backend --seed
 Then:
     python3 scripts/bench_queries.py [container] [graph] [runs]
-Defaults: claimgraph-falkordb, diktiax_bench, 200. Uses FalkorDB's own
+Defaults: diktiax-falkordb, diktiax_bench, 200. Uses FalkorDB's own
 "internal execution time" via redis-cli inside the container, after 10 warm-up runs.
 Delete the graph afterwards: docker exec <container> redis-cli GRAPH.DELETE diktiax_bench
 """
@@ -14,7 +14,7 @@ import statistics
 import subprocess
 import sys
 
-CONTAINER, GRAPH, RUNS = (sys.argv[1:] + ["claimgraph-falkordb", "diktiax_bench", "200"][len(sys.argv[1:]):])[:3]
+CONTAINER, GRAPH, RUNS = (sys.argv[1:] + ["diktiax-falkordb", "diktiax_bench", "200"][len(sys.argv[1:]):])[:3]
 RUNS, WARMUP, CLAIM = int(RUNS), 10, "CLM-48291"
 SRC = (pathlib.Path(__file__).parent.parent / "backend/src/db/queries.rs").read_text()
 
