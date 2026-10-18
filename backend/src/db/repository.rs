@@ -1,23 +1,16 @@
-//! FalkorDB-backed graph repository: connection, claim reads and claim writes.
-//! Seeding lives in `seed.rs`, detectors and centrality in `detectors.rs`.
+//! FalkorDB-backed graph repository: connection, the read-only evidence lane and the two
+//! query entry points. Its methods are split by concern across `claims.rs`,
+//! `investigations.rs`, `graph_algorithms.rs`, `detectors.rs`, `investigators.rs` and `seed.rs`.
 
-use super::mapping::{
-    claim_summary, col, graph_edge, graph_node, investigation_record, node_key, opt_text, text,
-};
 use super::queries;
-use crate::domain::{
-    ClaimSummary, InvestigationRecord, NewClaim, PriorVerdicts, RingComponent, SubgraphPayload,
-};
-use chrono::Utc;
 use falkordb::{
-    AsyncGraph, Edge, FalkorClientBuilder, FalkorConnectionInfo, FalkorResult, FalkorValue, Node,
-    QueryResult, Row, RowStream,
+    AsyncGraph, FalkorClientBuilder, FalkorConnectionInfo, FalkorResult, FalkorValue, QueryResult,
+    Row, RowStream,
 };
 use futures_core::Stream;
-use std::collections::HashSet;
 use std::pin::Pin;
 use std::time::Duration;
-use tracing::info;
+use tracing::{info, warn};
 
 pub(crate) type Params<'a> = Vec<(&'a str, FalkorValue)>;
 
@@ -36,26 +29,54 @@ async fn collect(result: FalkorResult<QueryResult<RowStream>>) -> Result<Vec<Row
     Ok(rows)
 }
 
+/// FalkorDB user the evidence lane logs in as when `with_read_only_lane` succeeds.
+pub const READER_USER: &str = "diktiax_reader";
+pub const LANE_READ_ONLY: &str = "read-only user";
+pub const LANE_SHARED: &str = "shared client";
+
+fn connection_info(url: &str) -> Result<FalkorConnectionInfo, String> {
+    url.try_into()
+        .map_err(|e| format!("invalid FalkorDB URL '{url}': {e:?}"))
+}
+
+async fn open_graph(info: FalkorConnectionInfo, graph: &str) -> Result<AsyncGraph, String> {
+    let address = info.address();
+    let client = FalkorClientBuilder::new_async()
+        .with_connection_info(info)
+        .with_connect_timeout(Some(Duration::from_secs(3)))
+        .build()
+        .await
+        .map_err(|e| format!("FalkorDB unreachable at {address}: {e}"))?;
+    Ok(client.select_graph(graph))
+}
+
+async fn redis_connection(
+    info: redis::ConnectionInfo,
+) -> Result<redis::aio::MultiplexedConnection, String> {
+    redis::Client::open(info)
+        .map_err(|e| e.to_string())?
+        .get_multiplexed_async_connection()
+        .await
+        .map_err(|e| e.to_string())
+}
+
 #[derive(Clone)]
 pub struct FalkorGraphRepository {
     graph: AsyncGraph,
+    /// Client for `read_rows`: the read-only user's when that lane is up, else `graph`.
+    reader: AsyncGraph,
+    evidence_lane: &'static str,
     graph_name: String,
 }
 
 impl FalkorGraphRepository {
     /// Connects and verifies the server answers a trivial query. No fallback of any kind.
     pub async fn connect(url: &str, graph: &str) -> Result<Self, String> {
-        let info: FalkorConnectionInfo = url
-            .try_into()
-            .map_err(|e| format!("invalid FalkorDB URL '{url}': {e:?}"))?;
-        let client = FalkorClientBuilder::new_async()
-            .with_connection_info(info)
-            .with_connect_timeout(Some(Duration::from_secs(3)))
-            .build()
-            .await
-            .map_err(|e| format!("FalkorDB unreachable at {url}: {e}"))?;
+        let graph_handle = open_graph(connection_info(url)?, graph).await?;
         let repo = Self {
-            graph: client.select_graph(graph),
+            reader: graph_handle.clone(),
+            graph: graph_handle,
+            evidence_lane: LANE_SHARED,
             graph_name: graph.to_string(),
         };
         repo.rows(queries::PING, vec![])
@@ -69,6 +90,76 @@ impl FalkorGraphRepository {
         &self.graph_name
     }
 
+    /// `LANE_READ_ONLY` or `LANE_SHARED`, for `/api/health`.
+    pub fn evidence_lane(&self) -> &'static str {
+        self.evidence_lane
+    }
+
+    /// Creates or updates `user` so it may run only GRAPH.RO_QUERY on this graph (plus PING and
+    /// `INFO server` for the client handshake), then routes `read_rows` through a client logged
+    /// in as that user. Any failure (no ACL support, bad credentials, timeout) keeps the shared
+    /// client with a warning: the site must never go down over this.
+    pub async fn with_read_only_lane(mut self, url: &str, user: &str, password: &str) -> Self {
+        let attempt = tokio::time::timeout(
+            Duration::from_secs(5),
+            self.open_reader(url, user, password),
+        )
+        .await
+        .unwrap_or_else(|_| Err("timed out".into()));
+        match attempt {
+            Ok(reader) => {
+                self.reader = reader;
+                self.evidence_lane = LANE_READ_ONLY;
+                info!("Evidence lane: FalkorDB user '{user}' (GRAPH.RO_QUERY only)");
+            }
+            Err(e) => {
+                warn!("Evidence lane: read-only user unavailable ({e}); using the shared client")
+            }
+        }
+        self
+    }
+
+    async fn open_reader(
+        &self,
+        url: &str,
+        user: &str,
+        password: &str,
+    ) -> Result<AsyncGraph, String> {
+        let FalkorConnectionInfo::Redis(admin) = connection_info(url)?;
+        // `>pw` adds a password without dropping others, so a second process (e.g. the MCP
+        // server next to the HTTP server) with its own per-process secret keeps working.
+        // `~graph`: this graph's key only (FalkorDB flags RO_QUERY's key spec as RW, so `%R~` would
+        // deny it); `-@all` then GRAPH.RO_QUERY back, so the command list is what keeps it read-only.
+        redis::cmd("ACL")
+            .arg("SETUSER")
+            .arg(user)
+            .arg("on")
+            .arg(format!(">{password}"))
+            .arg("resetkeys")
+            .arg(format!("~{}", self.graph_name))
+            .arg("resetchannels")
+            .arg("-@all")
+            .arg("+graph.ro_query")
+            .arg("+ping")
+            // The falkordb client reads `INFO server` once at connect (sentinel detection).
+            .arg("+info|server")
+            .exec_async(&mut redis_connection(admin.clone()).await?)
+            .await
+            .map_err(|e| format!("ACL SETUSER failed: {e}"))?;
+        let settings = admin
+            .redis_settings()
+            .clone()
+            .set_username(user)
+            .set_password(password);
+        let reader_info = admin.set_redis_settings(settings);
+        // Login check that does not need the graph to exist yet.
+        redis::cmd("PING")
+            .exec_async(&mut redis_connection(reader_info.clone()).await?)
+            .await
+            .map_err(|e| format!("reader login failed: {e}"))?;
+        open_graph(FalkorConnectionInfo::Redis(reader_info), &self.graph_name).await
+    }
+
     /// Executes one Cypher statement (GRAPH.QUERY) with parameters and collects every row,
     /// failing on the first row that cannot be parsed. Use for writes, and for statements that
     /// must work on a graph that does not exist yet (GRAPH.QUERY creates it, RO_QUERY errors).
@@ -77,13 +168,16 @@ impl FalkorGraphRepository {
         collect(graph.query(query).with_params(params).execute().await).await
     }
 
-    /// Single entry point for pure reads: GRAPH.RO_QUERY with a server-side timeout.
+    /// Single entry point for pure reads: GRAPH.RO_QUERY with a server-side timeout, on the
+    /// read-only user's client when that lane is up. Return scalars, maps and lists only: a
+    /// node or edge value makes the falkordb crate refresh its schema with GRAPH.QUERY, which
+    /// the read-only user is denied.
     pub(crate) async fn read_rows(
         &self,
         query: &str,
         params: Params<'_>,
     ) -> Result<Vec<Row>, String> {
-        let mut graph = self.graph.clone();
+        let mut graph = self.reader.clone();
         collect(
             graph
                 .ro_query(query)
@@ -97,285 +191,5 @@ impl FalkorGraphRepository {
 
     pub(crate) fn graph_handle(&self) -> AsyncGraph {
         self.graph.clone()
-    }
-
-    pub async fn list_claims(&self) -> Result<Vec<ClaimSummary>, String> {
-        self.read_rows(&queries::list_claims(), vec![])
-            .await?
-            .iter()
-            .map(claim_summary)
-            .collect()
-    }
-
-    pub async fn get_claim(&self, claim_id: &str) -> Result<Option<ClaimSummary>, String> {
-        let rows = self
-            .read_rows(&queries::get_claim(), vec![("claim_id", text(claim_id))])
-            .await?;
-        rows.first().map(claim_summary).transpose()
-    }
-
-    /// Past verdicts for a claim, newest first; empty when never investigated.
-    pub async fn investigation_history(
-        &self,
-        claim_id: &str,
-    ) -> Result<Vec<InvestigationRecord>, String> {
-        let rows = self
-            .read_rows(
-                queries::INVESTIGATION_HISTORY,
-                vec![("claim_id", text(claim_id))],
-            )
-            .await?;
-        if rows.is_empty() {
-            return Err(format!("claim {claim_id} not found"));
-        }
-        rows.iter()
-            .filter_map(|row| investigation_record(row).transpose())
-            .collect()
-    }
-
-    /// Count, newest verdict and its RELIED_ON claims from one read (PRIOR_VERDICTS), so they
-    /// agree even while other runs record verdicts. `None` when never investigated.
-    pub async fn prior_verdicts(&self, claim_id: &str) -> Result<Option<PriorVerdicts>, String> {
-        let rows = self
-            .read_rows(queries::PRIOR_VERDICTS, vec![("claim_id", text(claim_id))])
-            .await?;
-        let row = rows
-            .first()
-            .ok_or_else(|| format!("claim {claim_id} not found"))?;
-        let Some(latest) = investigation_record(row)? else {
-            return Ok(None);
-        };
-        let count: i64 = col(row, "prior")?;
-        Ok(Some(PriorVerdicts {
-            count: usize::try_from(count).map_err(|e| format!("column 'prior': {e}"))?,
-            latest,
-            relied_on: col(row, "relied_on")?,
-        }))
-    }
-
-    /// The claim's weakly connected component (algo.WCC); errors if the claim is unknown.
-    pub async fn ring_component(&self, claim_id: &str) -> Result<RingComponent, String> {
-        let rows = self
-            .read_rows(queries::RING_COMPONENT, vec![("claim_id", text(claim_id))])
-            .await?;
-        let row = rows
-            .first()
-            .ok_or_else(|| format!("claim {claim_id} not found"))?;
-        let mut claims: Vec<String> = col(row, "claims")?;
-        claims.sort();
-        Ok(RingComponent {
-            claim_id: claim_id.to_string(),
-            size: claims.len(),
-            claims,
-        })
-    }
-
-    pub async fn claim_shops(&self, claim_id: &str) -> Result<Vec<String>, String> {
-        self.read_rows(queries::CLAIM_SHOPS, vec![("claim_id", text(claim_id))])
-            .await?
-            .iter()
-            .map(|row| col(row, "shop_id"))
-            .collect()
-    }
-
-    /// Deduplicated neighbourhood of a claim up to `depth` hops (clamped to 1..=4).
-    pub async fn claim_subgraph(
-        &self,
-        claim_id: &str,
-        depth: u8,
-    ) -> Result<SubgraphPayload, String> {
-        let params = || vec![("claim_id", text(claim_id))];
-        let rows = self
-            .read_rows(&queries::claim_subgraph(depth), params())
-            .await?;
-        let mut payload = SubgraphPayload::default();
-        let mut seen_nodes = HashSet::new();
-        let mut seen_edges = HashSet::new();
-
-        if rows.is_empty() {
-            let claim = self.read_rows(queries::CLAIM_NODE, params()).await?;
-            let row = claim
-                .first()
-                .ok_or_else(|| format!("claim {claim_id} not found"))?;
-            payload
-                .nodes
-                .push(graph_node(&col::<Node>(row, "node")?, claim_id)?);
-            return Ok(payload);
-        }
-
-        for row in &rows {
-            let src: Node = col(row, "src")?;
-            let dst: Node = col(row, "dst")?;
-            let rel: Edge = col(row, "rel")?;
-            for node in [&src, &dst] {
-                if seen_nodes.insert(node.entity_id) {
-                    payload.nodes.push(graph_node(node, claim_id)?);
-                }
-            }
-            if seen_edges.insert(rel.entity_id) {
-                payload
-                    .edges
-                    .push(graph_edge(&rel, node_key(&src)?, node_key(&dst)?)?);
-            }
-        }
-        Ok(payload)
-    }
-
-    /// Files a new claim, linking it to shared Phone/Address/VIN/Location/RepairShop nodes.
-    pub async fn ingest_claim(&self, claim: NewClaim) -> Result<ClaimSummary, String> {
-        claim.validate()?;
-        let claim_id = match claim.claim_id.as_deref() {
-            Some(id) => id.trim().to_string(),
-            None => format!(
-                "CLM-{}",
-                uuid::Uuid::new_v4().simple().to_string()[..8].to_uppercase()
-            ),
-        };
-        if self.get_claim(&claim_id).await?.is_some() {
-            return Err(format!("claim {claim_id} already exists"));
-        }
-        let now = Utc::now();
-        let filed_at = now.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-        let (customer_id, vehicle_id, accident_id) = (
-            format!("CUST-{claim_id}"),
-            format!("VEH-{claim_id}"),
-            format!("ACC-{claim_id}"),
-        );
-        let params: Params = vec![
-            ("claim_id", text(&claim_id)),
-            ("customer_id", text(&customer_id)),
-            ("vehicle_id", text(&vehicle_id)),
-            ("accident_id", text(&accident_id)),
-            ("claimant_name", text(claim.claimant_name.trim())),
-            ("phone", text(claim.phone.trim())),
-            ("address", text(claim.address.trim())),
-            ("vin", text(claim.vehicle_vin.trim())),
-            ("location_id", text(claim.location_id.trim())),
-            ("repair_shop_id", text(claim.repair_shop_id.trim())),
-            (
-                "clinic_id",
-                opt_text(claim.clinic_id.as_deref().map(str::trim)),
-            ),
-            (
-                "adjuster_id",
-                opt_text(claim.adjuster_id.as_deref().map(str::trim)),
-            ),
-            ("amount", FalkorValue::F64(claim.amount)),
-            ("police_report", FalkorValue::Bool(claim.police_report)),
-            ("filed_at", text(&filed_at)),
-            (
-                "filed_day",
-                FalkorValue::I64(now.timestamp().div_euclid(86_400)),
-            ),
-        ];
-        let rows = self.rows(queries::INGEST_CLAIM, params).await?;
-        let row = rows
-            .first()
-            .ok_or_else(|| format!("ingest of {claim_id} returned no row"))?;
-        let summary = claim_summary(row)?;
-        info!(
-            "Ingested claim {} into graph '{}'",
-            summary.claim_id, self.graph_name
-        );
-        Ok(summary)
-    }
-
-    pub async fn set_claim_status(&self, claim_id: &str, status: &str) -> Result<(), String> {
-        if status.trim().is_empty() {
-            return Err("status must not be empty".into());
-        }
-        let params = vec![("claim_id", text(claim_id)), ("status", text(status))];
-        let rows = self.rows(queries::SET_CLAIM_STATUS, params).await?;
-        if rows.is_empty() {
-            return Err(format!("claim {claim_id} not found"));
-        }
-        Ok(())
-    }
-
-    /// Persists an Investigation node linked to the claim and to its previous verdict
-    /// (RECORD_CHAINED_INVESTIGATION). A chain-constraint violation means a concurrent run took
-    /// the head first; the statement is re-run, with a fresh `recorded_at`, so chain order and
-    /// `recorded_at` order agree. Every failed attempt implies another run committed.
-    pub async fn record_investigation(
-        &self,
-        claim_id: &str,
-        decision: &str,
-        risk_score: i32,
-        certificate_id: &str,
-    ) -> Result<(), String> {
-        let params = || {
-            vec![
-                ("claim_id", text(claim_id)),
-                ("decision", text(decision)),
-                ("risk_score", FalkorValue::I64(i64::from(risk_score))),
-                ("certificate_id", text(certificate_id)),
-                ("recorded_at", text(&Utc::now().to_rfc3339())),
-            ]
-        };
-        let mut attempt = 1;
-        let rows = loop {
-            match self
-                .rows(queries::RECORD_CHAINED_INVESTIGATION, params())
-                .await
-            {
-                Err(e) if is_chain_violation(&e) && attempt < CHAIN_ATTEMPTS => attempt += 1,
-                other => break other?,
-            }
-        };
-        if rows.is_empty() {
-            return Err(format!("claim {claim_id} not found"));
-        }
-        Ok(())
-    }
-
-    /// `(investigation)-[:RELIED_ON]->(claim)` for each id in `claim_ids` that names an existing
-    /// Claim; returns how many edges were created.
-    pub async fn link_relied_on(
-        &self,
-        investigation_id: &str,
-        claim_ids: &[String],
-    ) -> Result<i64, String> {
-        let params = vec![
-            ("investigation_id", text(investigation_id)),
-            (
-                "claim_ids",
-                FalkorValue::Array(claim_ids.iter().map(|id| text(id)).collect()),
-            ),
-        ];
-        let rows = self.rows(queries::LINK_RELIED_ON, params).await?;
-        rows.first().map_or(Ok(0), |row| col(row, "linked"))
-    }
-}
-
-/// Attempts per record_investigation call. Each lost attempt means another run on the
-/// same claim committed, so this caps simultaneous writers per claim at 64; raise it (or add
-/// backoff) if more ever race.
-const CHAIN_ATTEMPTS: usize = 64;
-
-/// True for a violation of SUPERSEDES_CONSTRAINT or CHAIN_ROOT_CONSTRAINT. FalkorDB reports
-/// "unique constraint violation, on edge of relationship-type SUPERSEDES" and
-/// "unique constraint violation on node of type InvestigationChain".
-fn is_chain_violation(error: &str) -> bool {
-    error.contains("constraint violation")
-        && (error.contains(queries::SUPERSEDES_CONSTRAINT.0)
-            || error.contains(queries::CHAIN_ROOT_CONSTRAINT.0))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::is_chain_violation;
-
-    #[test]
-    fn matches_only_chain_constraint_violations() {
-        assert!(is_chain_violation(
-            "FalkorDB query failed: unique constraint violation, on edge of relationship-type SUPERSEDES"
-        ));
-        assert!(is_chain_violation(
-            "FalkorDB query failed: unique constraint violation on node of type InvestigationChain"
-        ));
-        assert!(!is_chain_violation(
-            "FalkorDB query failed: constraint violation, on edge of relationship-type ASSIGNED_INVESTIGATOR"
-        ));
-        assert!(!is_chain_violation("connection refused"));
     }
 }

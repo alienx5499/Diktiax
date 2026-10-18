@@ -21,7 +21,7 @@ https://github.com/user-attachments/assets/8bf9e6ba-1c15-4737-89f5-df575e0ed24d
 > 2. Video: [0:10](https://youtu.be/DLu3_uuH42A?t=10) the ring · [1:30](https://youtu.be/DLu3_uuH42A?t=90) the agent investigates · [1:45](https://youtu.be/DLu3_uuH42A?t=105) WCC picks the corroboration targets · [2:32](https://youtu.be/DLu3_uuH42A?t=152) 5,040 claims · [3:27](https://youtu.be/DLu3_uuH42A?t=207) the agent reads its past verdicts.
 > 3. Headline: on 5,040 generated claims the graph agent froze 200 of 240 fraud claims and 0 honest ones (precision 1.00, recall 0.83, F1 0.91); per-claim rules flagged 2,789 honest drivers (0.04, 0.50, 0.08). The other 40 fraud claims and 169 honest ones went to audit. 17 ms median per investigation. A pre-registered re-run on a fresh seed gave the same picture: rules flagged 2,753 honest drivers, the graph froze 200 of 240 and 0 honest.
 > 4. No browser? `curl -s https://diktiax.onrender.com/api/health` (expect `"falkordb":"ok"`; it also wakes the service), `curl -s -X POST https://diktiax.onrender.com/api/investigate/CLM-48291`, then `curl -s https://diktiax.onrender.com/api/claims/CLM-48291/investigations` to see the stored verdict. Investigate again after 15 s and the dossier's `memory` block shows the earlier verdict and the checks it skipped.
-> 5. Proof: `cargo test --release --test scale_benchmark -- --ignored --nocapture` and `cargo test --release --test agent_memory -- --ignored --test-threads=1` in `backend/`. The hosted graph reseeds on every restart, so its investigation history starts empty.
+> 5. Every number, with its test, command and commit: [`CLAIMS.md`](CLAIMS.md). Proof: `cargo test --release --test scale_benchmark -- --ignored --nocapture` and `cargo test --release --test agent_memory -- --ignored --test-threads=1` in `backend/`. The hosted graph reseeds on every restart, so its investigation history starts empty.
 
 ## The problem
 
@@ -32,7 +32,7 @@ An SIU (Special Investigation Unit) analyst reviews claims one at a time. Organi
 - all three were handled by the same adjuster
 - two of the claimants share a phone number
 
-None of that lives in any single record, and a vector search over claim text can't find it either: it returns claims that *read* alike, not claims that are *connected*. In a graph, each of those signals is one short traversal.
+None of that lives in any single record, and a vector search over claim text can't separate it either: it returns claims that *read* alike, not claims that are *connected*. We measured it ([`scripts/vector_baseline/RESULTS.md`](scripts/vector_baseline/RESULTS.md), MiniLM embeddings in a FalkorDB vector index): on the seeded accident stories, vector search finds every ring-mate in its top 3, but every fraud claim also gets honest claims as neighbours, and the evasive ring members, whose files look like honest ones, drift away from their ring. The graph's ring components hold no honest claim. In a graph, each of those signals is one short traversal.
 
 ![Similar text vs shared connections: the same three claims in vector search and in the graph](https://github.com/user-attachments/assets/51da4099-e95e-4b19-a651-85cbf2bf6c23)
 
@@ -111,6 +111,23 @@ A real MCP session (JSON-RPC over stdio against the `--mcp-server` binary, recor
 ← {"claim_id":"CLM-48291","claims":["CLM-39102","CLM-44730","CLM-48291"],"size":3}
 ```
 
+Three more graph-algorithm tools only outside agents get (recorded the same way, on a freshly seeded throwaway graph). `connection_path` runs `algo.SPpaths`; `shop_influence` runs `algo.pageRank`; `ring_communities` runs `algo.labelPropagation`:
+
+```text
+→ tools/call connection_path {"claim_a":"CLM-48291","claim_b":"CLM-39102"}
+← {"claim_a":"CLM-48291","claim_b":"CLM-39102","hops":2,"max_hops":6,"paths":[{"nodes":[{"id":"CLM-48291","label":"Claim"},{"id":"MED-201","label":"Clinic"},{"id":"CLM-39102","label":"Claim"}],"relationships":["TREATED_AT","TREATED_AT"]},{"nodes":[{"id":"CLM-48291","label":"Claim"},{"id":"SHOP-801","label":"RepairShop"},{"id":"CLM-39102","label":"Claim"}],"relationships":["REPAIRED_AT","REPAIRED_AT"]}]}
+→ tools/call connection_path {"claim_a":"CLM-48291","claim_b":"CLM-10022"}
+← {"claim_a":"CLM-48291","claim_b":"CLM-10022","hops":null,"max_hops":6,"paths":[]}
+→ tools/call shop_influence {"limit":3}
+← [{"claims":3,"id":"MED-201","label":"Clinic","name":"Golden State Wellness & Spine Care","score":0.0440960042178631},{"claims":3,"id":"SHOP-801","label":"RepairShop","name":"Apex Auto Collision & Restoration","score":0.0238356813788414},{"claims":2,"id":"SHOP-220","label":"RepairShop","name":"Berkeley Honest Auto Body","score":0.0214039161801338}]
+→ tools/call ring_communities {}
+← [{"claims":["CLM-20417","CLM-20988"],"community_id":17,"providers":[{"id":"MED-100","label":"Clinic"},{"id":"SHOP-220","label":"RepairShop"}],"size":2},{"claims":["CLM-31205","CLM-55104"],"community_id":15,"providers":[{"id":"SHOP-505","label":"RepairShop"}],"size":2},{"claims":["CLM-39102","CLM-44730","CLM-48291"],"community_id":37,"providers":[{"id":"MED-201","label":"Clinic"},{"id":"SHOP-801","label":"RepairShop"}],"size":3}]
+→ tools/call ring_communities {"claim_id":"CLM-10022"}
+← [{"claims":["CLM-10022"],"community_id":16,"providers":[{"id":"SHOP-100","label":"RepairShop"}],"size":1}]
+```
+
+Label propagation gives exactly the WCC components on the seed graph: it separates the ring from the clean claims, but the two clean pairs that share a customer address or a shop form communities too, so a community on its own is not a fraud signal. Shops and clinics end up in communities of their own, so `providers` lists the shops and clinics the community's claims used.
+
 The score never reads this history: on a re-run a past verdict can save corroboration work and is reported in the dossier's `memory` block, but it is never evidence for a new score.
 
 ## Graph data model
@@ -156,13 +173,13 @@ Every query below is copied verbatim from [`backend/src/db/queries.rs`](backend/
 
 Each detector models a scheme insurance fraud investigators deal with in practice:
 
-| Detector | Real-world scheme it models |
-|---|---|
-| Ghost collision ring | Staged or invented ("paper") accidents: a ring reuses one location and routes every claim to the same body shop |
-| Shared contact network | Claimant rings: separate "strangers" on different claims who share a phone number or home address |
-| Cloned VIN | Vehicle cloning: one VIN carried by two registrations (often in different states), each filing its own claim |
-| Kickback triangle | Provider collusion: a body shop, clinic and adjuster who keep appearing together on unreported accidents, sometimes with a recorded referral arrangement |
-| Shop concentration | A repair shop acting as a ring hub, with far more claims than its peers |
+| Detector | Real-world scheme it models | Documented example |
+|---|---|---|
+| Ghost collision ring | Staged or invented ("paper") accidents: a ring reuses one location and routes every claim to the same body shop | Staged-accident rings such as swoop-and-squat, where the same vehicles turn up in other claims and injuries are referred to specific clinics ([Insurance Journal, 2012](https://www.insurancejournal.com/magazines/mag-features/2012/11/05/268856.htm)) |
+| Shared contact network | Claimant rings: separate "strangers" on different claims who share a phone number or home address | A New Jersey ring whose "runners" recruited participants for more than 90 staged accidents, all treated at the organiser's clinics ([Claims Journal, 2004](https://www.claimsjournal.com/news/east/2004/12/07/48303.htm)) |
+| Cloned VIN | Vehicle cloning: one VIN carried by two registrations (often in different states), each filing its own claim | NICB on VIN cloning, "identity theft for vehicles", flagged by concurrent registrations in a vehicle's history ([Insurance Journal, 2007](https://www.insurancejournal.com/news/national/2007/04/18/78797.htm)) |
+| Kickback triangle | Provider collusion: a body shop, clinic and adjuster who keep appearing together on unreported accidents, sometimes with a recorded referral arrangement | A $23M South Florida scheme that paid tow-truck drivers and body-shop workers per patient to steer accident victims to its chiropractic clinics ([Fox News, 2018](https://www.foxnews.com/us/ringleader-in-23m-insurance-fraud-lived-lavish-lifestyle-with-bentley-64g-watch-and-oceanfront-home)) |
+| Shop concentration | A repair shop acting as a ring hub, with far more claims than its peers | The same pattern from the shop's side: referrals concentrated on specific providers in one area (Insurance Journal, 2012, above) |
 
 The data is generated, so these are the shapes of those schemes, not cases taken from real claim files.
 
@@ -282,6 +299,7 @@ Runs on FalkorDB v4.22.1, the newest release of the 4.x line, pinned for reprodu
 - **An LLM can't clear a claim by skipping checks.** With the Claude or Groq planner, any detector it didn't run is executed before scoring. Its closing text is labelled "not used for scoring".
 - **Bounded:** the planner gets at most 12 tool calls; the coverage guard can add up to 4 detector runs after that. If the LLM API fails, the rule-based planner takes over and the dossier says so (`planner: rule-based (fallback: LLM rate-limited)`); the raw provider error goes to the server log only.
 - **Read-only by construction:** exploration, the four detectors, shop centrality and the claim list run through `GRAPH.RO_QUERY` with a 5 s server-side timeout (`read_rows` in [`repository.rs`](backend/src/db/repository.rs)), so none of the evidence-gathering queries can write to the graph. Writes (ingest, the verdict write-back, investigator assignment, seeding) use `GRAPH.QUERY`, as does the startup and health `RETURN 1` ping, because `GRAPH.RO_QUERY` errors on a graph that doesn't exist yet.
+- **A database user that can only read:** at startup the backend creates (or updates) the FalkorDB user `diktiax_reader` with `ACL SETUSER`, allowed `GRAPH.RO_QUERY` on this graph's key and nothing else beyond `PING` and `INFO server` for the client handshake, and every `read_rows` query runs on a second client logged in as that user (`with_read_only_lane` in [`repository.rs`](backend/src/db/repository.rs)). So the evidence lane is read-only at the server too, not only by command choice: a write or `GRAPH.DELETE` from it gets `NOPERM`. The password is `FALKORDB_READER_PASSWORD` or a random per-process secret. If the ACL setup or the login fails, the backend logs a warning and keeps the shared client; `/api/health` reports which one is live as `"evidence_lane": "read-only user"` or `"shared client"`.
 - **Never cleared on bad data:** if exploring the claim or any detector on it fails, the score is only a lower bound (missing detectors can only add points). A bound that already reaches HIGH or CRITICAL still freezes the payout; anything lower becomes `INCONCLUSIVE` with status `NEEDS_MANUAL_REVIEW`, and the failed calls are named in the rationale. Only an exact `LOW_RISK` result clears a claim.
 - **Checkable:** each investigation returns a certificate with a SHA-256 digest over the claim id and the ordered steps, so a saved dossier can be re-hashed later to spot edits (the server doesn't store or verify it yet). Each detector step carries the Cypher that produced it.
 
@@ -315,7 +333,7 @@ cd backend && cargo test --test baseline -- --ignored --nocapture
 | Loose rings | 40 | 0 | 0 | 40 |
 | Honest | 4,800 | 2,789 | 0 | 169 |
 
-The graph agent froze 200 of 240 fraud claims and no honest ones; loose rings are a blind spot for freezing and go to audit instead, along with 3.5% of honest claims. An LLM reading a stratified 50-claim sample one claim at a time caught 3 of 24 fraud claims. Each investigation took 17 ms median (p95 23 ms) at this size. The evasive rings are generated with a police report and an amount between $3,000 and $12,000 ([`scale_benchmark.rs`](backend/tests/scale_benchmark.rs)), exactly the claims the per-claim rules can't flag, so the rules' 0 of 80 there is by construction: that group exists to show what a ring looks like once it learns the rules. The data is generated, so this measures the mechanism on rings built the way the detectors expect, not real-world accuracy. The answer key comes from the same seeded generator and is hashed before any claim is investigated: the hash shows the key wasn't edited after scoring, not that the generator wasn't tuned between runs.
+The graph agent froze 200 of 240 fraud claims and no honest ones; loose rings are a blind spot for freezing and go to audit instead, along with 3.5% of honest claims. An LLM reading a stratified 50-claim sample one claim at a time caught 3 of 24 fraud claims. Each investigation took 17 ms median (p95 23 ms) at this size. The evasive rings are generated with a police report and an amount between $3,000 and $12,000 ([`scale_benchmark.rs`](backend/tests/scale_benchmark.rs)), exactly the claims the per-claim rules can't flag, so the rules' 0 of 80 there is by construction: that group exists to show what a ring looks like once it learns the rules. The data is generated, so this measures the mechanism on rings built the way the detectors expect, not real-world accuracy. The answer key comes from the same seeded generator and is hashed before any claim is investigated: the hash shows the key wasn't edited after scoring, not that the generator wasn't tuned between runs. The labels are the generator's, and the detectors never see them, so the score isn't true by construction: the same run reports the 40 loose-ring claims the graph doesn't freeze.
 
 **Pre-registered re-run.** The original answer key holds claim ids and labels only, so its hash is the same for any seed and proves little on its own. So the benchmark was run again on a fresh seed (20261019) as a pre-registration: the answer key, now bound to a SHA-256 of the whole generated dataset, was committed on its own before the results existed, and the results went into a later commit: key `9826efe` at 02:53 IST on 18 Oct, results `2cf0baa` at 03:13 IST; `git log -- scripts/scale/prereg/` shows the order. Same outcome: rules 120 of 240 fraud and 2,753 honest flagged; graph 200 of 240 frozen and 0 honest (178 honest to audit). Reproduce with `SCALE_SEED=20_261_019 cargo test --release --test scale_benchmark scale_benchmark -- --ignored --exact`; it fails if the key's hash differs from the committed one ([`scripts/scale/prereg/`](scripts/scale/prereg/)).
 
@@ -364,7 +382,7 @@ YIELD node, componentId WITH node, componentId WHERE node:Claim
 RETURN componentId, collect(node.id) AS claims
 ```
 
-Weakly connected components put CLM-48291, CLM-39102 and CLM-44730 in one component with no other claim. `algo.pageRank(null, null)` ranks the ring's shop SHOP-801 first among repair shops (0.0234 vs 0.0210 for the next), a narrow margin on a 68-node graph. The labelled form `algo.pageRank('RepairShop', 'REPAIRED_AT')` gives every shop the same score, so the test uses the unlabelled one.
+Weakly connected components put CLM-48291, CLM-39102 and CLM-44730 in one component with no other claim. `algo.pageRank(null, null)` ranks the ring's shop SHOP-801 first among repair shops (0.0238 vs 0.0214 for the next), a narrow margin on a 68-node graph. The labelled form `algo.pageRank('RepairShop', 'REPAIRED_AT')` gives every shop the same score, so the test uses the unlabelled one.
 
 Entity resolution is tested too: [`ingest_merges_shared_contacts`](backend/tests/graph_repository.rs) files two new claims with different claimants and the same phone and address, then checks there is exactly one `Phone` and one `Address` node with two incoming edges each. A third claim with that phone still leaves one `Phone` node.
 
@@ -372,21 +390,27 @@ Entity resolution is tested too: [`ingest_merges_shared_contacts`](backend/tests
 
 | Feature | Where | What it does here |
 |---|---|---|
-| `MERGE` entity resolution | [`queries.rs:99`](backend/src/db/queries.rs) · test `ingest_merges_shared_contacts` | Phones, addresses and VINs merge on value, so a reused phone links claims the moment one is filed |
-| Parameterised multi-hop Cypher | [`queries.rs:59-93`](backend/src/db/queries.rs) | The four detectors (4 to 6 hops each); every value is a parameter |
-| Bounded variable-length traversal | [`queries.rs:49`](backend/src/db/queries.rs) | `[*1..3]` neighbourhood that decides which detectors run (depth clamped and inlined, FalkorDB#3350) |
-| `GRAPH.RO_QUERY` + timeout | [`repository.rs:79-89`](backend/src/db/repository.rs) | All evidence queries are read-only with a 5 s server-side timeout |
+| `MERGE` entity resolution | [`queries.rs:104`](backend/src/db/queries.rs) · test `ingest_merges_shared_contacts` | Phones, addresses and VINs merge on value, so a reused phone links claims the moment one is filed |
+| Parameterised multi-hop Cypher | [`queries.rs:64-98`](backend/src/db/queries.rs) | The four detectors (4 to 6 hops each); every value is a parameter |
+| Bounded variable-length traversal | [`queries.rs:51`](backend/src/db/queries.rs) | `[*1..3]` neighbourhood that decides which detectors run (depth clamped and inlined, FalkorDB#3350) |
+| `GRAPH.RO_QUERY` + timeout | [`repository.rs:171-190`](backend/src/db/repository.rs) · test `algorithm_queries_obey_the_read_timeout` | All evidence queries are read-only with a 5 s server-side timeout. With a 1 ms timeout on a 22k-node graph the WCC, pageRank and labelPropagation queries fail with the server's timeout error (SPpaths, capped at 6 hops, finishes in about 2 ms), but FalkorDB checks the deadline between operations: one `algo.*` call runs to the end first (label propagation errs after 73 ms of an 80 ms run), so the HTTP scan cap and cooldown are what bound the work |
+| ACL user for reads | [`repository.rs:98-161`](backend/src/db/repository.rs) · test `reader_user_is_denied_writes_and_delete` | Evidence queries log in as a user limited to `GRAPH.RO_QUERY`; writes and `GRAPH.DELETE` from it get `NOPERM` |
 | Indexes + `GRAPH.EXPLAIN` | [`queries.rs:6`](backend/src/db/queries.rs) | 13 indexes plus 3 unique constraints that make concurrent writes safe; three of four detectors open with an index seek (plans above) |
-| Write-back | [`queries.rs:118-160, 199`](backend/src/db/queries.rs) | Claim status, `Investigation` node, `MERGE`d `ASSIGNED_INVESTIGATOR` edge |
+| Write-back | [`queries.rs:123-165, 204`](backend/src/db/queries.rs) | Claim status, `Investigation` node, `MERGE`d `ASSIGNED_INVESTIGATOR` edge |
 | Named graphs | [`tests/common/mod.rs`](backend/tests/common/mod.rs) | Each test run gets its own graph; the scale graph is named by its data hash (`scale_e03eb6b9`) |
-| `algo.WCC`, `algo.pageRank` | [`graph_algorithms.rs:60,83`](backend/tests/graph_algorithms.rs) · [`queries.rs:219`](backend/src/db/queries.rs) | Test-time cross-checks on the demo graph. WCC is also live through the `ring_components` tool (read-only, 5 s timeout), which returns every claim in the target's component. The rule planner calls it once after a detector match and spreads its corroboration runs (one per matched detector, as before) across ring members the evidence names; scoring still reads only the target claim's detectors, and live shop centrality is a degree count ([`queries.rs:94`](backend/src/db/queries.rs)) |
-| MCP | [`backend/src/mcp`](backend/src/mcp) | The same graph tools, plus `investigation_history` and `ring_components`, for Claude or any MCP client |
+| `algo.WCC`, `algo.pageRank` | [`graph_algorithms.rs:60,83`](backend/tests/graph_algorithms.rs) · [`queries.rs:224`](backend/src/db/queries.rs) | Test-time cross-checks on the demo graph. WCC is also live through the `ring_components` tool (read-only, 5 s timeout), which returns every claim in the target's component. The rule planner calls it once after a detector match and spreads its corroboration runs (one per matched detector, as before) across ring members the evidence names; scoring still reads only the target claim's detectors, and live shop centrality is a degree count ([`queries.rs:99`](backend/src/db/queries.rs)) |
+| `algo.SPpaths` | [`queries.rs:238`](backend/src/db/queries.rs) · [`graph_algorithms.rs:135`](backend/tests/graph_algorithms.rs) | Live through the external-only `connection_path` tool: every minimal-length path (up to 5) between two claims over the WCC relationship types, any direction, at most 6 hops, read-only with the 5 s timeout. The ring claims CLM-48291 and CLM-39102 link in 2 hops, through SHOP-801 and through MED-201; the shared phone is 4 hops, so it is not on a shortest path. A clean claim (CLM-10022) has no path |
+| `algo.pageRank` (live) | [`queries.rs:252`](backend/src/db/queries.rs) · [`graph_algorithms.rs:191`](backend/tests/graph_algorithms.rs) | Live through the external-only `shop_influence` tool: repair shops and clinics ranked by whole-graph PageRank, with their claim counts. On the seed graph the ring's clinic MED-201 ranks first (0.0441) and SHOP-801 is the top repair shop (0.0238 vs 0.0214) |
+| `algo.labelPropagation` | [`queries.rs:265`](backend/src/db/queries.rs) · [`graph_algorithms.rs:239`](backend/tests/graph_algorithms.rs) | Live through the external-only `ring_communities` tool over the WCC projection, `algo.labelPropagation({nodeLabels, relationshipTypes}) YIELD node, communityId` (also `maxIterations`). Seed graph: {CLM-39102, CLM-44730, CLM-48291} with SHOP-801 and MED-201, plus the clean pairs {CLM-20417, CLM-20988} and {CLM-31205, CLM-55104}; the same split as WCC. It errors if a projected label or relationship type is missing from the graph |
+| MCP | [`backend/src/mcp`](backend/src/mcp) | The same graph tools, plus `investigation_history`, `connection_path`, `shop_influence`, `ring_communities` and `ring_components`, for Claude or any MCP client |
+
+Graph algorithms used live: `algo.WCC` (`ring_components`, which also picks the agent's corroboration targets), `algo.SPpaths` (`connection_path`), `algo.pageRank` (`shop_influence`) and `algo.labelPropagation` (`ring_communities`), all through the read-only lane with the 5 s timeout. We also tried `algo.betweenness` and `algo.HarmonicCentrality` and dropped them: on v4.22.1 they follow edge direction only, and since claims point into shops and clinics, every provider scored 0.
 
 ## Architecture
 
 ![Diktiax architecture: Vercel dashboard, Render container with the Rust agent and FalkorDB, Groq planner, Claude over MCP](https://github.com/user-attachments/assets/1ff17889-0d11-41e4-a3f9-9fcf21e3c726)
 
-The agent, the HTTP API and the MCP server all use the same tool catalog, so Claude calls the same graph tools the agent calls, plus two that only outside agents get: `investigate_claim` and `investigation_history`. In production FalkorDB and the backend share one Render container, with FalkorDB bound to loopback; locally they run as two Docker services.
+The agent, the HTTP API and the MCP server all use the same tool catalog, so Claude calls the same graph tools the agent calls, plus five that only outside agents get: `investigate_claim`, `investigation_history`, `connection_path`, `shop_influence` and `ring_communities`. In production FalkorDB and the backend share one Render container, with FalkorDB bound to loopback; locally they run as two Docker services.
 
 - **Backend:** Rust 1.99 (Axum 0.8, Tokio 1.53, `falkordb` crate 0.10, reqwest 0.13 with rustls). FalkorDB v4.22.1 is the only database.
 - **Frontend:** Next.js 16.4 / React 19.3, TypeScript 6, Tailwind CSS 4, Bun. Agent trace timeline, live graph canvas, claim intake form.
@@ -425,9 +449,11 @@ Command line:
 cd backend
 cargo run --release -- --investigate CLM-48291    # prints the full dossier as JSON
 cargo run --release -- --seed                     # reset the graph (investigations write to it)
-cargo test                                        # unit tests
-cargo test -- --ignored --test-threads=1          # integration tests against live FalkorDB
+cargo test                                        # 94 unit tests
+cargo test -- --ignored --test-threads=1          # 34 integration tests against live FalkorDB
 ```
+
+128 Rust tests in all: 94 unit tests, and 34 integration tests that run against a real FalkorDB on a uniquely named graph and delete it afterwards.
 
 Everything in containers: `docker compose -f docker-compose.full.yml up --build`, then open http://localhost:3000.
 
@@ -440,7 +466,7 @@ cd backend && cargo build --release
 claude mcp add diktiax -e FALKORDB_URL=falkor://127.0.0.1:6379 -- "$PWD/target/release/claimgraph-backend" --mcp-server
 ```
 
-This exposes the 9 read-only graph tools (including `ring_components`, the claim's `algo.WCC` component), `investigation_history` (read-only, past verdicts) and `investigate_claim`, which runs the full agent and **writes to the graph**. For Claude Desktop, use the same command and args in `claude_desktop_config.json`.
+This exposes the 9 read-only graph tools (including `ring_components`, the claim's `algo.WCC` component), `investigation_history` (read-only, past verdicts), `connection_path` (read-only, `algo.SPpaths` between two claims), `shop_influence` (read-only, `algo.pageRank` over shops and clinics), `ring_communities` (read-only, `algo.labelPropagation` communities of claims) and `investigate_claim`, which runs the full agent and **writes to the graph**. For Claude Desktop, use the same command and args in `claude_desktop_config.json`.
 
 ## Deploy
 
@@ -462,10 +488,13 @@ The deployed demo is deliberately open: anyone can file and investigate claims o
 | `GET /api/claims/:id/investigations` | Past verdicts for a claim, newest first (404 for an unknown claim) |
 | `GET /api/mcp/tools` · `POST /api/mcp/call` | The graph tool catalog over HTTP |
 | `POST /api/mcp/call` `{"name":"ring_components","arguments":{"claim_id":"CLM-48291"}}` | Claims in the same `algo.WCC` component, e.g. `{"claim_id":"CLM-48291","claims":["CLM-39102","CLM-44730","CLM-48291"],"size":3}` (404 for an unknown claim) |
+| `POST /api/mcp/call` `{"name":"connection_path","arguments":{"claim_a":"CLM-48291","claim_b":"CLM-39102"}}` | Minimal-length `algo.SPpaths` paths between two claims (`hops` 2 here, via SHOP-801 and via MED-201); `"paths":[]` and `"hops":null` when not connected within 6 hops; 404 for an unknown claim |
+| `POST /api/mcp/call` `{"name":"shop_influence","arguments":{"limit":3}}` | Repair shops and clinics by `algo.pageRank`, highest first, each with `label`, `id`, `name`, `score`, `claims` |
+| `POST /api/mcp/call` `{"name":"ring_communities","arguments":{"claim_id":"CLM-48291"}}` | `algo.labelPropagation` communities with at least 2 claims (or, with `claim_id`, only that claim's community), each with `community_id`, `claims`, `size`, `providers`; 404 for an unknown claim |
 | `POST /api/seed` · `GET /api/health` | Reset the demo graph (needs `x-admin-token`; local dev: `DIKTIAX_DEV=1`) · health check |
 
 - `POST /api/investigate` is limited to one request per visitor every 15 s (HTTP 429 with `Retry-After`), so one visitor can't use up the LLM quota for everyone.
-- `ring_components` over HTTP (`POST /api/mcp/call`) runs `algo.WCC` across the whole graph, so it is limited to one call per visitor every 3 s (HTTP 429 with `Retry-After`). Inside an investigation the agent runs it at most once, whatever the planner asks.
+- `ring_components`, `connection_path`, `shop_influence` and `ring_communities` over HTTP (`POST /api/mcp/call`) run graph algorithms (`algo.WCC`, `algo.SPpaths`, `algo.pageRank`, `algo.labelPropagation`), so each is limited to one call per visitor every 3 s (HTTP 429 with `Retry-After`; each tool has its own bucket). Inside an investigation the agent runs `ring_components` at most once, whatever the planner asks, and never sees the other three.
 
 ## Limitations
 

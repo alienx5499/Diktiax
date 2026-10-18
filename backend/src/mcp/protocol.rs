@@ -18,7 +18,9 @@ const INSTRUCTIONS: &str =
     get_claim, run the detect_* tools to test specific fraud-ring patterns, use list_claim_shops + \
     shop_centrality for repair-shop hubs, explore_claim_subgraph for raw context, \
     investigation_history to continue from verdicts recorded in earlier sessions, \
-    ring_components for the whole ring a claim belongs to, or \
+    ring_components for the whole ring a claim belongs to, connection_path for how two claims \
+    are linked, shop_influence for repair shops and clinics ranked by PageRank, \
+    ring_communities for label-propagation communities of claims, or \
     investigate_claim for a full autonomous verdict (an already recorded verdict is returned \
     with reused: true unless force is set).";
 
@@ -266,10 +268,10 @@ mod tests {
     }
 
     #[test]
-    fn tools_list_has_eleven_tools_with_strict_schemas() {
+    fn tools_list_has_fourteen_tools_with_strict_schemas() {
         let r = respond(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#);
         let tools = r["result"]["tools"].as_array().cloned().unwrap_or_default();
-        assert_eq!(tools.len(), 11);
+        assert_eq!(tools.len(), 14);
         let investigate = tools.iter().find(|t| t["name"] == "investigate_claim");
         let schema = investigate.map(|t| t["inputSchema"].clone());
         assert_eq!(
@@ -289,17 +291,24 @@ mod tests {
     }
 
     #[test]
-    fn investigation_history_is_external_only() {
+    fn external_only_tools_stay_out_of_the_planner() {
         let planner = crate::tools::tool_definitions();
         let mcp = respond(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#);
         let mcp = mcp["result"]["tools"]
             .as_array()
             .cloned()
             .unwrap_or_default();
-        let name = "investigation_history";
-        assert!(planner.iter().all(|t| t.name != name));
-        assert!(mcp.iter().any(|t| t["name"] == name));
-        assert!(external_tool_definitions().iter().any(|t| t.name == name));
+        for name in [
+            "investigation_history",
+            "connection_path",
+            "shop_influence",
+            "ring_communities",
+        ] {
+            assert!(planner.iter().all(|t| t.name != name), "{name}");
+            assert!(mcp.iter().any(|t| t["name"] == name), "{name}");
+            assert!(external_tool_definitions().iter().any(|t| t.name == name));
+        }
+        assert_eq!(planner.len(), 9, "planner catalog unchanged");
         // The WCC tool is planner-visible, so external agents get it through the shared catalog.
         assert!(planner.iter().any(|t| t.name == "ring_components"));
         assert!(mcp.iter().any(|t| t["name"] == "ring_components"));

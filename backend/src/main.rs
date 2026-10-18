@@ -1,8 +1,10 @@
 use claimgraph_backend::actions::{ActionDispatcher, Webhook};
 use claimgraph_backend::agent::{ClaimInvestigator, ClaudeConfig, OpenAiConfig, PlannerConfig};
-use claimgraph_backend::api::{create_router, AppState, Cooldown, RING_COMPONENTS_COOLDOWN_SECS};
+use claimgraph_backend::api::{
+    create_router, AppState, Cooldown, GRAPH_SCAN_COOLDOWN_SECS, MAX_CONCURRENT_GRAPH_SCANS,
+};
 use claimgraph_backend::config::AppConfig;
-use claimgraph_backend::db::FalkorGraphRepository;
+use claimgraph_backend::db::{FalkorGraphRepository, READER_USER};
 use claimgraph_backend::mcp;
 use std::net::SocketAddr;
 use tracing::info;
@@ -21,7 +23,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .init();
 
     let config = AppConfig::from_env();
-    let repo = FalkorGraphRepository::connect(&config.falkordb_url, &config.graph_name).await?;
+    let repo = FalkorGraphRepository::connect(&config.falkordb_url, &config.graph_name)
+        .await?
+        .with_read_only_lane(&config.falkordb_url, READER_USER, &config.reader_password)
+        .await;
     // Precedence: ANTHROPIC_API_KEY -> Claude, else GROQ_API_KEY -> OpenAI-compatible, else rules.
     let planner = match (ClaudeConfig::from_env()?, OpenAiConfig::from_env()?) {
         (Some(claude), _) => PlannerConfig::Claude(claude),
@@ -59,7 +64,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 repo,
                 investigator,
                 investigate_cooldown: Cooldown::from_env(),
-                ring_cooldown: Cooldown::new(RING_COMPONENTS_COOLDOWN_SECS),
+                scan_cooldown: Cooldown::new(GRAPH_SCAN_COOLDOWN_SECS),
+                scan_slots: std::sync::Arc::new(tokio::sync::Semaphore::new(
+                    MAX_CONCURRENT_GRAPH_SCANS,
+                )),
             };
             let app = create_router(state).into_make_service_with_connect_info::<SocketAddr>();
             axum::serve(listener, app).await?;

@@ -126,3 +126,174 @@ async fn ring_components_tool_returns_the_ghost_ring() {
     drop(repo);
     drop(graph);
 }
+
+/// `connection_path` (algo.SPpaths): the ring's claims link in 2 hops through the shared shop and
+/// the shared clinic (the shared phone is 4 hops, so not a shortest path); a clean control claim
+/// is not connected within 6 hops; unknown ids are errors.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "requires a live FalkorDB (docker compose up -d falkordb)"]
+async fn connection_path_links_ring_claims_only() {
+    let graph = TestGraph::new("claimgraph_path_it");
+    let repo = FalkorGraphRepository::connect(&graph.url, &graph.name)
+        .await
+        .expect("FalkorDB must be running for ignored integration tests");
+    repo.seed(true).await.expect("seed");
+    let call = |a: &'static str, b: &'static str| {
+        let repo = repo.clone();
+        async move {
+            let args = serde_json::json!({ "claim_a": a, "claim_b": b });
+            claimgraph_backend::tools::execute_external_tool(&repo, "connection_path", &args).await
+        }
+    };
+
+    let hop = |label: &str, id: &str| serde_json::json!({ "label": label, "id": id });
+    let via = |label: &str, id: &str, rel: &str| {
+        serde_json::json!({
+            "nodes": [hop("Claim", "CLM-48291"), hop(label, id), hop("Claim", "CLM-39102")],
+            "relationships": [rel, rel],
+        })
+    };
+    assert_eq!(
+        call("CLM-48291", "CLM-39102").await.expect("linked"),
+        serde_json::json!({
+            "claim_a": "CLM-48291",
+            "claim_b": "CLM-39102",
+            "max_hops": 6,
+            "hops": 2,
+            "paths": [
+                via("Clinic", "MED-201", "TREATED_AT"),
+                via("RepairShop", "SHOP-801", "REPAIRED_AT"),
+            ],
+        })
+    );
+    assert_eq!(
+        call("CLM-48291", "CLM-10022").await.expect("unlinked"),
+        serde_json::json!({
+            "claim_a": "CLM-48291",
+            "claim_b": "CLM-10022",
+            "max_hops": 6,
+            "hops": null,
+            "paths": [],
+        })
+    );
+    let missing = call("CLM-48291", "CLM-NOPE").await.expect_err("unknown");
+    assert!(missing.contains("not found"), "{missing}");
+
+    drop(repo);
+    drop(graph);
+}
+
+/// `shop_influence` (algo.pageRank) on the seed graph: the ring's clinic MED-201 ranks first
+/// (it also receives the shop's COLLUDES_WITH referral edge), the ring's shop SHOP-801 is the
+/// top repair shop.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "requires a live FalkorDB (docker compose up -d falkordb)"]
+async fn shop_influence_ranks_the_ring_providers_first() {
+    let graph = TestGraph::new("claimgraph_influence_it");
+    let repo = FalkorGraphRepository::connect(&graph.url, &graph.name)
+        .await
+        .expect("FalkorDB must be running for ignored integration tests");
+    repo.seed(true).await.expect("seed");
+
+    let ranked = claimgraph_backend::tools::execute_external_tool(
+        &repo,
+        "shop_influence",
+        &serde_json::json!({ "limit": 3 }),
+    )
+    .await
+    .expect("shop_influence");
+    let order: Vec<(&str, &str, i64)> = ranked
+        .as_array()
+        .expect("array")
+        .iter()
+        .map(|r| {
+            (
+                r["label"].as_str().unwrap(),
+                r["id"].as_str().unwrap(),
+                r["claims"].as_i64().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        order,
+        [
+            ("Clinic", "MED-201", 3),
+            ("RepairShop", "SHOP-801", 3),
+            ("RepairShop", "SHOP-220", 2),
+        ]
+    );
+    assert!(ranked[1]["score"].as_f64() > ranked[2]["score"].as_f64());
+
+    let all = repo.shop_influence(50).await.expect("all");
+    assert_eq!(all.len(), 6, "4 shops and 2 clinics");
+
+    drop(repo);
+    drop(graph);
+}
+
+/// `ring_communities` (algo.labelPropagation, RING_COMPONENT projection): on the seed graph the
+/// communities match the WCC components exactly, so the ghost ring is its own community and the
+/// two clean pairs are communities too. A claim in no shared community still gets its own.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "requires a live FalkorDB (docker compose up -d falkordb)"]
+async fn ring_communities_separate_the_ring() {
+    let graph = TestGraph::new("claimgraph_lpa_it");
+    let repo = FalkorGraphRepository::connect(&graph.url, &graph.name)
+        .await
+        .expect("FalkorDB must be running for ignored integration tests");
+    repo.seed(true).await.expect("seed");
+    let call = |args: serde_json::Value| {
+        let repo = repo.clone();
+        async move {
+            claimgraph_backend::tools::execute_external_tool(&repo, "ring_communities", &args).await
+        }
+    };
+    // Community ids are FalkorDB-internal, so compare everything else.
+    let shape = |v: serde_json::Value| -> Vec<(Vec<String>, u64, Vec<String>)> {
+        v.as_array()
+            .expect("array")
+            .iter()
+            .map(|c| {
+                assert!(c["community_id"].is_i64());
+                let ids = |key: &str, field: &str| -> Vec<String> {
+                    c[key]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .map(|x| x.get(field).unwrap_or(x).as_str().unwrap().to_string())
+                        .collect()
+                };
+                (
+                    ids("claims", ""),
+                    c["size"].as_u64().unwrap(),
+                    ids("providers", "id"),
+                )
+            })
+            .collect()
+    };
+    let s = |v: &str| v.split(' ').map(String::from).collect::<Vec<_>>();
+    let ring = (s("CLM-39102 CLM-44730 CLM-48291"), 3, s("MED-201 SHOP-801"));
+
+    assert_eq!(
+        shape(call(serde_json::json!({})).await.expect("all")),
+        [
+            (s("CLM-20417 CLM-20988"), 2, s("MED-100 SHOP-220")),
+            (s("CLM-31205 CLM-55104"), 2, s("SHOP-505")),
+            ring.clone(),
+        ]
+    );
+    let one = call(serde_json::json!({ "claim_id": "CLM-48291" })).await;
+    assert_eq!(shape(one.expect("ring")), [ring]);
+    let alone = call(serde_json::json!({ "claim_id": "CLM-10022" })).await;
+    assert_eq!(
+        shape(alone.expect("single")),
+        [(s("CLM-10022"), 1, s("SHOP-100"))]
+    );
+    let missing = call(serde_json::json!({ "claim_id": "CLM-NOPE" })).await;
+    assert!(missing.expect_err("unknown").contains("not found"));
+    let bad = call(serde_json::json!({ "claim_id": 7 })).await;
+    assert!(bad.expect_err("non-string").contains("argument 'claim_id'"));
+
+    drop(repo);
+    drop(graph);
+}

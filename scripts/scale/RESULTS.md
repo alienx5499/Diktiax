@@ -18,7 +18,7 @@ Graph agent per investigation: median 17.2 ms, p95 23.4 ms, max 34.8 ms (rule-ba
 
 ## LLM-only, on a stratified 50-claim sample
 
-`python3 scripts/llm_only_baseline.py 1 scripts/scale/llm_sample.json` (Groq `openai/gpt-oss-120b`, temperature 0, one run to stay inside the free-tier daily token budget). The LLM sees each claim's own fields only.
+`python3 scripts/llm_only_baseline.py 1 scripts/scale/llm_sample.json` (Groq `openai/gpt-oss-120b`, temperature 0, one run to stay inside the provider's daily token budget). The LLM sees each claim's own fields only.
 
 | Group | Claims | LLM flagged | Graph agent flagged (from the full run above) |
 |---|---|---|---|

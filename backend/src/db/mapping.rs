@@ -41,6 +41,27 @@ pub fn investigation_record(row: &Row) -> Result<Option<InvestigationRecord>, St
     }))
 }
 
+/// Node rebuilt from `<prefix>_id`, `<prefix>_labels`, `<prefix>_props` columns (see
+/// `queries::claim_subgraph`), so the read-only lane never has to parse a node value.
+pub fn node_columns(row: &Row, prefix: &str) -> Result<Node, String> {
+    Ok(Node {
+        entity_id: col(row, &format!("{prefix}_id"))?,
+        labels: col(row, &format!("{prefix}_labels"))?,
+        properties: col(row, &format!("{prefix}_props"))?,
+    })
+}
+
+/// Edge rebuilt from `<prefix>_id`, `<prefix>_type`, `<prefix>_props` columns.
+pub fn edge_columns(row: &Row, prefix: &str, src: i64, dst: i64) -> Result<Edge, String> {
+    Ok(Edge {
+        entity_id: col(row, &format!("{prefix}_id"))?,
+        relationship_type: col(row, &format!("{prefix}_type"))?,
+        src_node_id: src,
+        dst_node_id: dst,
+        properties: col(row, &format!("{prefix}_props"))?,
+    })
+}
+
 /// Business key of a node: `id`, or the natural key of a shared contact/VIN node.
 pub fn node_key(node: &Node) -> Result<String, String> {
     for key in ["id", "number", "line", "vin"] {

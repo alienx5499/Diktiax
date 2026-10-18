@@ -17,6 +17,8 @@ tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 chrono = { version = "0.4.45", features = ["serde"] }
 uuid = { version = "1.28", features = ["v4", "serde"] }
 falkordb = { version = "0.10.4", features = ["tokio"] }
+# Already pulled in by falkordb (same version); used directly only for ACL SETUSER.
+redis = { version = "1.7", default-features = false, features = ["tokio-comp"] }
 sha2 = "0.11"
 hex = "0.4.3"
 futures-core = "0.3.34"

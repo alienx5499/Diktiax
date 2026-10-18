@@ -10,8 +10,12 @@ use std::time::{Duration, Instant};
 /// (0 disables) for local dev and tests.
 pub const INVESTIGATE_COOLDOWN_SECS: u64 = 15;
 
-/// One `ring_components` call per visitor per this many seconds over HTTP (whole-graph algo.WCC).
-pub const RING_COMPONENTS_COOLDOWN_SECS: u64 = 3;
+/// One call per visitor per tool per this many seconds over HTTP for the tools that scan the
+/// whole graph (algo.WCC, algo.SPpaths, algo.pageRank).
+pub const GRAPH_SCAN_COOLDOWN_SECS: u64 = 3;
+
+/// Server-wide cap on graph-scan tool calls running at once over HTTP, whoever sends them.
+pub const MAX_CONCURRENT_GRAPH_SCANS: usize = 2;
 
 /// Prune expired entries once the map grows past this, so memory stays bounded.
 const PRUNE_THRESHOLD: usize = 1_000;

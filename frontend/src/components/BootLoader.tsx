@@ -2,7 +2,7 @@
 import React, { useEffect, useRef } from 'react';
 
 // Rose-orbit curve r(t) = R - A·s·cos(k·t) (after paidax01/math-curve-loaders), drawn as a
-// comet of particles. Shown on first load while a free-tier backend wakes up.
+// comet of particles. Shown on first load while the backend wakes up.
 const PARTICLES = 64;
 const TRAIL = 0.42;
 const LAP_MS = 5200;
@@ -101,7 +101,7 @@ export function BootLoader() {
       <div className="space-y-2">
         <p className="text-2xl sm:text-3xl font-black uppercase tracking-tighter text-[#121212]">Waking up the graph engine</p>
         <p className="text-xs font-bold uppercase tracking-widest text-[#121212]/70">
-          FalkorDB and the agent run on a free tier and can take up to a minute to start
+          FalkorDB and the agent can take up to a minute to start
         </p>
       </div>
     </div>

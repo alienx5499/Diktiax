@@ -7,6 +7,7 @@ use crate::db::FalkorGraphRepository;
 use axum::routing::{get, post};
 use axum::Router;
 use std::sync::Arc;
+use tokio::sync::Semaphore;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::TraceLayer;
 
@@ -15,9 +16,13 @@ pub struct AppState {
     pub investigator: ClaimInvestigator,
     /// Per-visitor cooldown on `POST /api/investigate/{id}` (the only LLM-backed route).
     pub investigate_cooldown: Cooldown,
-    /// Per-visitor cooldown on the `ring_components` tool over HTTP: it runs algo.WCC over the
-    /// whole graph, so one visitor can't call it in a tight loop.
-    pub ring_cooldown: Cooldown,
+    /// Per-visitor, per-tool cooldown over HTTP on the tools that scan the whole graph
+    /// (`ring_components`, `connection_path`, `shop_influence`, `ring_communities`), so one
+    /// visitor can't call them in a tight loop.
+    pub scan_cooldown: Cooldown,
+    /// Server-wide cap on graph scans in flight over HTTP, so many visitors together can't
+    /// tie up FalkorDB either.
+    pub scan_slots: Arc<Semaphore>,
 }
 
 pub fn create_router(state: AppState) -> Router {

@@ -246,6 +246,7 @@ dependencies = [
  "falkordb",
  "futures-core",
  "hex",
+ "redis",
  "reqwest",
  "serde",
  "serde_json",

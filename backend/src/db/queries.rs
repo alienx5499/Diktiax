@@ -35,7 +35,9 @@ pub fn get_claim() -> String {
     )
 }
 
-pub const CLAIM_NODE: &str = "MATCH (c:Claim {id: $claim_id}) RETURN c AS node";
+/// Node and edge columns are id/labels/props scalars, not entities: see `read_rows`.
+pub const CLAIM_NODE: &str = "MATCH (c:Claim {id: $claim_id}) \
+     RETURN id(c) AS node_id, labels(c) AS node_labels, properties(c) AS node_props";
 
 pub const CLAIM_SHOPS: &str =
     "MATCH (:Claim {id: $claim_id})-[:REPAIRED_AT]->(s:RepairShop) RETURN s.id AS shop_id ORDER BY shop_id";
@@ -51,7 +53,10 @@ pub fn claim_subgraph(depth: u8) -> String {
     format!(
         "MATCH p = (:Claim {{id: $claim_id}})-[*1..{depth}]-() \
          UNWIND relationships(p) AS r WITH DISTINCT r \
-         RETURN startNode(r) AS src, r AS rel, endNode(r) AS dst"
+         WITH r, startNode(r) AS s, endNode(r) AS d \
+         RETURN id(s) AS src_id, labels(s) AS src_labels, properties(s) AS src_props, \
+                id(r) AS rel_id, type(r) AS rel_type, properties(r) AS rel_props, \
+                id(d) AS dst_id, labels(d) AS dst_labels, properties(d) AS dst_props"
     )
 }
 
@@ -222,3 +227,48 @@ pub const RING_COMPONENT: &str =
      YIELD node, componentId WITH node, componentId WHERE node:Claim \
      WITH componentId, collect(node.id) AS claims WHERE $claim_id IN claims \
      RETURN claims";
+
+/// Hop bound for CONNECTION_PATH (written into the query as maxLen).
+pub const MAX_PATH_HOPS: usize = 6;
+
+/// Up to 5 of the minimal-length paths (algo.SPpaths, any direction) between two claims over the
+/// same relationship types as RING_COMPONENT, at most 6 hops. pathCount 0 asks for every minimal
+/// path (pathCount n > 1 also returns longer ones). No rows when the claims are not connected
+/// within the bound or either id is unknown.
+pub const CONNECTION_PATH: &str = "MATCH (a:Claim {id: $claim_a}), (b:Claim {id: $claim_b}) \
+     CALL algo.SPpaths({sourceNode: a, targetNode: b, \
+     relTypes: ['FILED_CLAIM','HAS_PHONE','LIVES_AT','REPAIRED_AT','TREATED_AT'], \
+     relDirection: 'both', maxLen: 6, pathCount: 0}) YIELD path \
+     RETURN [n IN nodes(path) | labels(n)[0]] AS labels, \
+     [n IN nodes(path) | coalesce(n.id, n.number, n.line, n.vin)] AS ids, \
+     [r IN relationships(path) | type(r)] AS rels LIMIT 5";
+
+pub const COUNT_CLAIMS_BY_ID: &str =
+    "MATCH (c:Claim) WHERE c.id IN $claim_ids RETURN count(c) AS found";
+
+/// Repair shops and clinics ranked by whole-graph algo.pageRank, with their claim count.
+/// The labelled form (one label, one relationship type) scores every shop equally, so it runs
+/// over the whole graph and filters afterwards; O(V+E) per call.
+pub const SHOP_INFLUENCE: &str = "CALL algo.pageRank(null, null) YIELD node, score \
+     WITH node, score WHERE node:RepairShop OR node:Clinic \
+     OPTIONAL MATCH (node)<-[:REPAIRED_AT|TREATED_AT]-(c:Claim) \
+     RETURN labels(node)[0] AS label, node.id AS id, node.name AS name, score, count(c) AS claims \
+     ORDER BY score DESC, id LIMIT $limit";
+
+/// algo.labelPropagation over the RING_COMPONENT projection (the procedure accepts nodeLabels
+/// and relationshipTypes). One row per community holding at least 2 claims, or, with
+/// `$claim_id`, only that claim's community whatever its size (no rows for an unknown claim).
+/// On v4.22.1 propagation follows edge direction, so shops and clinics land in communities of
+/// their own, never with their claims: `providers` (`[label, id]`) are therefore the shops and
+/// clinics the community's claims were repaired or treated at. Community ids are not stable
+/// across graph changes. Cost: labels the whole projected graph on every call.
+pub const RING_COMMUNITIES: &str =
+    "CALL algo.labelPropagation({nodeLabels: ['Customer','Claim','Phone','Address','RepairShop','Clinic'], \
+     relationshipTypes: ['FILED_CLAIM','HAS_PHONE','LIVES_AT','REPAIRED_AT','TREATED_AT']}) \
+     YIELD node, communityId WITH communityId, node WHERE node:Claim \
+     WITH communityId, collect(node) AS members, collect(node.id) AS claims \
+     WHERE ($claim_id IS NULL AND size(claims) >= 2) OR $claim_id IN claims \
+     UNWIND members AS c OPTIONAL MATCH (c)-[:REPAIRED_AT|TREATED_AT]->(p) \
+     WITH communityId, claims, \
+     collect(DISTINCT CASE WHEN p IS NULL THEN NULL ELSE [labels(p)[0], p.id] END) AS providers \
+     RETURN communityId AS community_id, claims, providers";

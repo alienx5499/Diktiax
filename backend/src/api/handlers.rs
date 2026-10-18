@@ -13,6 +13,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use std::net::SocketAddr;
 use std::sync::Arc;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 type Shared = State<Arc<AppState>>;
 type ApiResult<T> = Result<Json<T>, ApiError>;
@@ -23,6 +24,7 @@ pub async fn health(State(state): Shared) -> ApiResult<Value> {
         "status": "ok",
         "falkordb": "ok",
         "graph_name": state.repo.graph_name(),
+        "evidence_lane": state.repo.evidence_lane(),
         "planner": state.investigator.planner_label(),
         "seed_enabled": seed_allowed(admin_token().as_deref(), None, dev_mode()),
     })))
@@ -154,24 +156,52 @@ pub async fn mcp_call(
             call.name
         )));
     }
-    if call.name == crate::tools::RING_COMPONENTS {
+    // Held by the spawned query task, so a client that disconnects can't free it early.
+    let mut scan_permit = None;
+    if crate::tools::is_graph_scan(&call.name) {
+        scan_permit = Some(scan_slot(&state.scan_slots)?);
         let visitor = visitor_key(&headers, peer.map(|Extension(ConnectInfo(addr))| addr));
-        if let Err(wait) = state.ring_cooldown.check(&visitor) {
+        if let Err(wait) = state
+            .scan_cooldown
+            .check(&format!("{}:{visitor}", call.name))
+        {
             return Err(ApiError::RateLimited {
                 message: format!(
-                    "One ring_components call every {} s per visitor. Try again in {wait} s.",
-                    state.ring_cooldown.period_secs()
+                    "One {} call every {} s per visitor. Try again in {wait} s.",
+                    call.name,
+                    state.scan_cooldown.period_secs()
                 ),
                 retry_after_secs: wait,
             });
         }
     }
-    match crate::tools::execute_external_tool(&state.repo, &call.name, &call.arguments).await {
+    let (repo, name, args) = (
+        state.repo.clone(),
+        call.name.clone(),
+        call.arguments.clone(),
+    );
+    let outcome = tokio::spawn(async move {
+        let _permit = scan_permit;
+        crate::tools::execute_external_tool(&repo, &name, &args).await
+    })
+    .await
+    .map_err(|e| ApiError::from_upstream(format!("tool task failed: {e}")))?;
+    match outcome {
         Ok(result) => Ok(Json(json!({ "tool": call.name, "result": result }))),
         // mcp argument validation errors all name the offending argument.
         Err(e) if e.contains("argument") => Err(ApiError::BadRequest(e)),
         Err(e) => Err(ApiError::from_upstream(e)),
     }
+}
+
+/// A free graph-scan slot, or 429 with `Retry-After: 1` when every slot is busy.
+fn scan_slot(slots: &Arc<Semaphore>) -> Result<OwnedSemaphorePermit, ApiError> {
+    Arc::clone(slots)
+        .try_acquire_owned()
+        .map_err(|_| ApiError::RateLimited {
+            message: "Too many graph scans running. Try again in 1 s.".into(),
+            retry_after_secs: 1,
+        })
 }
 
 fn admin_token() -> Option<String> {
@@ -192,7 +222,23 @@ fn seed_allowed(expected: Option<&str>, provided: Option<&str>, dev: bool) -> bo
 
 #[cfg(test)]
 mod tests {
-    use super::seed_allowed;
+    use super::{scan_slot, seed_allowed, ApiError};
+    use tokio::sync::Semaphore;
+
+    #[test]
+    fn scan_slots_cap_concurrent_scans() {
+        let slots = std::sync::Arc::new(Semaphore::new(2));
+        let first = scan_slot(&slots).expect("first slot");
+        let _second = scan_slot(&slots).expect("second slot");
+        match scan_slot(&slots) {
+            Err(ApiError::RateLimited {
+                retry_after_secs, ..
+            }) => assert_eq!(retry_after_secs, 1),
+            _ => panic!("a third concurrent scan must be refused with 429"),
+        }
+        drop(first);
+        assert!(scan_slot(&slots).is_ok(), "a finished scan frees its slot");
+    }
 
     #[test]
     fn seed_fails_closed() {

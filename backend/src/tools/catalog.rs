@@ -25,6 +25,24 @@ pub const INVESTIGATE_CLAIM: &str = "investigate_claim";
 /// External-only (MCP + /api/mcp): never offered to the agent's own planners.
 pub const INVESTIGATION_HISTORY: &str = "investigation_history";
 pub const RING_COMPONENTS: &str = "ring_components";
+/// External-only graph-algorithm tools (algo.SPpaths, algo.pageRank, algo.labelPropagation).
+pub const CONNECTION_PATH: &str = "connection_path";
+pub const SHOP_INFLUENCE: &str = "shop_influence";
+pub const RING_COMMUNITIES: &str = "ring_communities";
+
+/// Tools that scan the whole graph (the HTTP layer rate-limits these per visitor and server-wide).
+const GRAPH_SCAN_TOOLS: [&str; 4] = [
+    RING_COMPONENTS,
+    CONNECTION_PATH,
+    SHOP_INFLUENCE,
+    RING_COMMUNITIES,
+];
+
+pub fn is_graph_scan(name: &str) -> bool {
+    GRAPH_SCAN_TOOLS.contains(&name)
+}
+pub const DEFAULT_INFLUENCE_LIMIT: u8 = 10;
+pub const MAX_INFLUENCE_LIMIT: u8 = 50;
 
 pub const DEFAULT_DEPTH: u8 = 2;
 
@@ -150,7 +168,7 @@ pub fn tool_definitions() -> Vec<ToolDefinition> {
 }
 
 /// Tools for external agents (MCP, /api/mcp): the planner catalog plus the external-only memory
-/// tool. The agent's planners use `tool_definitions()` and never see the extra.
+/// and graph-algorithm tools. The agent's planners use `tool_definitions()` and never see them.
 pub fn external_tool_definitions() -> Vec<ToolDefinition> {
     let mut tools = tool_definitions();
     tools.push(claim_id_only(
@@ -158,6 +176,44 @@ pub fn external_tool_definitions() -> Vec<ToolDefinition> {
         "Past verdicts the Diktiax agent recorded for this claim, newest first: certificate id, \
          decision, risk score, time. Use it to continue from earlier work instead of \
          re-investigating.",
+    ));
+    tools.push(tool(
+        CONNECTION_PATH,
+        "How two claims are linked: FalkorDB algo.SPpaths over shared customers, phones, \
+         addresses, repair shops and clinics, any direction, at most 6 hops. Returns {claim_a, \
+         claim_b, max_hops, hops (null when not connected), paths: [{nodes: [{label, id}], \
+         relationships}]} with up to 5 shortest paths; errors if either claim is unknown.",
+        json!({
+            "claim_a": claim_id_property(),
+            "claim_b": claim_id_property(),
+        }),
+        &["claim_a", "claim_b"],
+    ));
+    tools.push(tool(
+        SHOP_INFLUENCE,
+        "Rank repair shops and clinics by FalkorDB algo.pageRank over the whole claim graph. \
+         Returns [{label, id, name, score, claims}] highest score first, where claims is the \
+         number of claims repaired or treated there.",
+        json!({
+            "limit": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": MAX_INFLUENCE_LIMIT,
+                "default": DEFAULT_INFLUENCE_LIMIT,
+                "description": "Number of providers to return (1-50, default 10)."
+            }
+        }),
+        &[],
+    ));
+    tools.push(tool(
+        RING_COMMUNITIES,
+        "Fraud-ring communities from FalkorDB algo.labelPropagation over customers, claims, \
+         phones, addresses, repair shops and clinics. Without claim_id, returns every community \
+         holding at least 2 claims; with claim_id, only that claim's community (any size). \
+         Returns [{community_id, claims (sorted ids), size, providers: [{label, id}]}], where \
+         providers are the shops and clinics those claims used; errors if the claim is unknown.",
+        json!({ "claim_id": claim_id_property() }),
+        &[],
     ));
     tools
 }

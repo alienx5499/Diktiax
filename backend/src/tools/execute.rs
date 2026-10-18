@@ -121,18 +121,56 @@ pub async fn execute_tool(
     run(repo, parse_call(name, args)?).await
 }
 
+fn influence_limit(args: &Value) -> Result<u8, String> {
+    let max = catalog::MAX_INFLUENCE_LIMIT;
+    match args.get("limit") {
+        None | Some(Value::Null) => Ok(catalog::DEFAULT_INFLUENCE_LIMIT),
+        Some(v) => v
+            .as_u64()
+            .and_then(|l| u8::try_from(l).ok())
+            .filter(|l| (1..=max).contains(l))
+            .ok_or_else(|| format!("argument 'limit' must be an integer between 1 and {max}")),
+    }
+}
+
+/// Validates the two claim ids of `connection_path`.
+fn claim_pair(args: &Value) -> Result<(String, String), String> {
+    let (a, b) = (
+        required_str(args, "claim_a")?,
+        required_str(args, "claim_b")?,
+    );
+    if a == b {
+        return Err("argument 'claim_b' must differ from 'claim_a'".into());
+    }
+    Ok((a, b))
+}
+
 /// Entry point for external callers (MCP, /api/mcp/call): `execute_tool` plus the external-only
-/// tool, which the agent loop (it calls `execute_tool`) can therefore never run.
+/// tools, which the agent loop (it calls `execute_tool`) can therefore never run.
 pub async fn execute_external_tool(
     repo: &FalkorGraphRepository,
     name: &str,
     args: &Value,
 ) -> Result<Value, String> {
-    if name == catalog::INVESTIGATION_HISTORY {
-        let claim_id = required_str(args, "claim_id")?;
-        return to_json(repo.investigation_history(&claim_id).await?);
+    match name {
+        catalog::INVESTIGATION_HISTORY => {
+            let claim_id = required_str(args, "claim_id")?;
+            to_json(repo.investigation_history(&claim_id).await?)
+        }
+        catalog::CONNECTION_PATH => {
+            let (a, b) = claim_pair(args)?;
+            to_json(repo.connection_path(&a, &b).await?)
+        }
+        catalog::SHOP_INFLUENCE => to_json(repo.shop_influence(influence_limit(args)?).await?),
+        catalog::RING_COMMUNITIES => {
+            let claim_id = match args.get("claim_id") {
+                None | Some(Value::Null) => None,
+                Some(_) => Some(required_str(args, "claim_id")?),
+            };
+            to_json(repo.ring_communities(claim_id.as_deref()).await?)
+        }
+        _ => execute_tool(repo, name, args).await,
     }
-    execute_tool(repo, name, args).await
 }
 
 #[cfg(test)]
@@ -159,12 +197,40 @@ mod tests {
     #[test]
     fn agent_loop_cannot_parse_external_only_tools() {
         assert!(parse_call(catalog::INVESTIGATION_HISTORY, &json!({ "claim_id": "C" })).is_err());
+        let pair = json!({ "claim_a": "A", "claim_b": "B" });
+        assert!(parse_call(catalog::CONNECTION_PATH, &pair).is_err());
+        assert!(parse_call(catalog::SHOP_INFLUENCE, &json!({})).is_err());
+        assert!(parse_call(catalog::RING_COMMUNITIES, &json!({})).is_err());
+        assert!(parse_call(catalog::RING_COMMUNITIES, &json!({ "claim_id": "C" })).is_err());
+        assert!(catalog::is_graph_scan(catalog::RING_COMMUNITIES));
         assert_eq!(
             parse_call(catalog::RING_COMPONENTS, &json!({ "claim_id": "C" })),
             Ok(ToolCall::RingComponent {
                 claim_id: "C".into()
             })
         );
+    }
+
+    #[test]
+    fn external_algorithm_args_are_validated() {
+        assert_eq!(
+            claim_pair(&json!({ "claim_a": " A ", "claim_b": "B" })),
+            Ok(("A".into(), "B".into()))
+        );
+        assert!(claim_pair(&json!({ "claim_a": "A" }))
+            .unwrap_err()
+            .contains("'claim_b'"));
+        assert!(claim_pair(&json!({ "claim_a": "A", "claim_b": "A" }))
+            .unwrap_err()
+            .contains("must differ"));
+        assert_eq!(influence_limit(&json!({})), Ok(10));
+        assert_eq!(influence_limit(&json!({ "limit": 50 })), Ok(50));
+        for bad in [json!(0), json!(51), json!(-1), json!(2.5), json!("3")] {
+            assert!(
+                influence_limit(&json!({ "limit": bad })).is_err(),
+                "limit {bad} should be rejected"
+            );
+        }
     }
 
     #[test]

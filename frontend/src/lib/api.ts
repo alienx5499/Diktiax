@@ -159,7 +159,7 @@ export class ApiError extends Error {
   }
 }
 
-// A free-tier host can take up to a minute to wake from idle; wait that long before giving up.
+// The backend can take up to a minute to wake from idle; wait that long before giving up.
 const DEFAULT_TIMEOUT_MS = 70000;
 
 async function request<T>(path: string, init: RequestInit = {}, timeoutMs = DEFAULT_TIMEOUT_MS): Promise<T> {

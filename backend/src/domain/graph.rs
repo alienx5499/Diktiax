@@ -100,3 +100,51 @@ mod tests {
         assert_eq!(empty.baseline, 0.0);
     }
 }
+
+/// One node on a connection path: its label and business key.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PathNode {
+    pub label: String,
+    pub id: String,
+}
+
+/// One shortest path: `nodes[i]` and `nodes[i + 1]` are joined by `relationships[i]`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PathTrace {
+    pub nodes: Vec<PathNode>,
+    pub relationships: Vec<String>,
+}
+
+/// Shortest paths between two claims; `paths` is empty and `hops` null when not connected
+/// within `max_hops`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ConnectionPath {
+    pub claim_a: String,
+    pub claim_b: String,
+    pub max_hops: usize,
+    pub hops: Option<usize>,
+    pub paths: Vec<PathTrace>,
+}
+
+/// PageRank of one repair shop or clinic.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct InfluenceRank {
+    pub label: String,
+    pub id: String,
+    pub name: Option<String>,
+    pub score: f64,
+    /// Claims repaired or treated there.
+    pub claims: i64,
+}
+
+/// One label-propagation community of claims.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RingCommunity {
+    /// FalkorDB's community id; not stable across graph changes.
+    pub community_id: i64,
+    /// Sorted claim ids.
+    pub claims: Vec<String>,
+    pub size: usize,
+    /// Shops and clinics the community's claims were repaired or treated at, sorted by id.
+    pub providers: Vec<PathNode>,
+}
