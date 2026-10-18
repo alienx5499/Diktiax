@@ -59,7 +59,7 @@ Every step is returned as a trace: tool, arguments, why it was chosen, what came
 
 Real runs with the rule-based planner (`cargo run --release -- --investigate <id>`):
 
-**CLM-48291 (ring member): 8 tool calls → risk 100, CRITICAL_FRAUD, payout frozen, investigator assigned**
+**CLM-48291 (ring member): 9 tool calls → risk 100, CRITICAL_FRAUD, payout frozen, investigator assigned**
 
 | # | Tool | Why the planner chose it | Result |
 |---|------|--------------------------|--------|
@@ -69,7 +69,9 @@ Real runs with the rule-based planner (`cargo run --release -- --investigate <id
 | 4 | `detect_vin_cloning` | A VIN is in the neighbourhood | no match |
 | 5 | `detect_kickback_triangle` | No police report; ADJ-04 and MED-201 attached | match, +40 |
 | 6 | `shop_centrality` SHOP-801 | SHOP-801 appears in the fraud evidence | 1.71× the average shop, anomalous |
-| 7-8 | detectors on CLM-39102 | Linked to CLM-48291 through the shared phone | match (corroboration, not scored) |
+| 7 | `ring_components` | Patterns matched; FalkorDB's `algo.WCC` component picks which linked claims to corroborate | component of 3 claims: CLM-39102, CLM-44730, CLM-48291 |
+| 8 | `detect_ghost_collision` on CLM-44730 | In the WCC component and named in the evidence | match (corroboration, not scored) |
+| 9 | `detect_kickback_triangle` on CLM-39102 | In the WCC component and named in the evidence | match (corroboration, not scored) |
 
 **CLM-10022 (clean claim): 3 tool calls → risk 0, cleared automatically**
 
@@ -81,7 +83,7 @@ The planner explores, runs two detectors, and stops. It never calls `detect_shar
 
 ![Re-investigating CLM-48291: the verdict comes first, and the memory panel shows the agent agrees with its earlier verdict and skipped 2 corroboration checks it already had evidence for](https://github.com/user-attachments/assets/9e6b947a-100c-4497-933c-ce9bbaf74525)
 
-**The coordination problem: two agents, or two runs of one agent, must never assign the same claim twice, fork its verdict history, or redo work already decided.** Diktiax makes the graph the shared memory that guarantees this. The agent writes every verdict and assignment into FalkorDB; the next run, the SIU team's workload and any other agent over MCP all read the same state; and the guarantees are database constraints, not app locks. Each one has a test that passes:
+**The coordination problem: two agents, or two runs of one agent, must never assign the same claim twice, fork its verdict history, or redo work already decided.** Diktiax makes the graph the shared memory that guarantees this. The agent writes every verdict and assignment into FalkorDB; the next run, the SIU team's workload and any other agent over MCP all read the same state; and the assignment, verdict-chain and review guarantees are FalkorDB unique constraints, not app locks (MCP verdict reuse uses a per-claim lock in the backend; see below). Each one has a test that passes:
 
 | Guarantee | Test |
 |---|---|
@@ -105,9 +107,9 @@ The planner explores, runs two detectors, and stops. It never calls `detect_shar
 - **Consistent under concurrency.** [`concurrent_investigations_keep_shared_state_consistent`](backend/tests/agent_memory.rs) runs 16 investigations at once (all 8 claims twice) and checks there are exactly 16 verdicts, exactly one investigator on each of the 5 flagged claims, none on the 3 clean ones, and an `open_cases` increase of exactly 5. Writing it caught a real race (two concurrent runs could assign a claim twice). FalkorDB does not document that a single read-then-write statement is serialised under concurrency, so the fix is a database constraint: one `MERGE` statement plus a unique constraint on `ASSIGNED_INVESTIGATOR.claim_id`, created at seed time and awaited until it is enforced. [`concurrent_direct_assignment_creates_one_edge`](backend/tests/agent_memory.rs) and [`concurrent_investigations_of_one_claim_assign_once`](backend/tests/agent_memory.rs) run 32 concurrent writers on one claim and always leave exactly one edge. [`without_the_constraint_concurrent_assignment_race_is_observed`](backend/tests/agent_memory.rs) drops the constraint and races the statement alone: on FalkorDB v4.22.1 it left one edge in all 60 rounds we ran (1,920 calls), so we could not reproduce a duplicate with the current single `MERGE` statement; the constraint is kept as the guarantee.
 - **Handoff between planners.** If the LLM planner fails mid-run, the rule-based planner continues from the same step history rather than starting over, and the dossier records where it took over.
 
-![Two agents, one claim: the Diktiax agent investigates and freezes over HTTP, a reviewer agent reads the memory and confirms over MCP, and the agent's re-run keeps the human decision; they never message each other](https://github.com/user-attachments/assets/94ad5fdc-d256-4169-9d8a-a31852a7f057)
+![Two agents, one claim: the Diktiax agent investigates and freezes over HTTP, a scripted MCP client playing the SIU reviewer reads the memory and confirms over MCP, and the agent's re-run keeps the human decision; they never message each other](https://github.com/user-attachments/assets/94ad5fdc-d256-4169-9d8a-a31852a7f057)
 
-**Two agents, one claim (a real run).** The Diktiax agent works over HTTP; a second agent, an MCP client acting as the SIU reviewer, works over the stdio MCP server; both share one throwaway graph and never message each other. Recorded with the release binary (rule-based planner), output trimmed:
+**Two agents, one claim (a real run).** The Diktiax agent works over HTTP; a second participant, a scripted MCP client playing the SIU reviewer ([`scripts/two_agents_demo.py`](scripts/two_agents_demo.py), no model of its own), works over the stdio MCP server; both share one throwaway graph and never message each other. Recorded with the release binary (rule-based planner), output trimmed:
 
 ```text
 [Diktiax agent, HTTP] POST /api/investigate/CLM-48291
@@ -389,6 +391,8 @@ Runs on FalkorDB v4.22.1, the newest release of the 4.x line, pinned for reprodu
 
 ## Does the graph matter? (measured)
 
+**Without FalkorDB the agent can't decide.** The rules that read one claim at a time, with no graph, flagged 2,789 honest drivers and caught none of the 80 evasive ring claims; with the graph the agent froze 200 of 240 fraud claims and no honest one (first run below, same picture on the pre-registered re-run). Inside each investigation, the 3-hop neighbourhood decides which detectors run at all, and FalkorDB's `algo.WCC` component decides which linked claims get re-checked.
+
 [`backend/tests/baseline.rs`](backend/tests/baseline.rs) runs classic single-claim red-flag rules (no police report, or amount ≥ $25,000, reading only the claim and its own accident) against the graph agent. It uses the seeded claims plus two constructed groups: ring members who file police reports and keep amounts small, and honest drivers whose claims carry red flags.
 
 | Group | Claims | Per-claim rules flagged | Graph agent flagged |
@@ -479,7 +483,7 @@ Entity resolution is tested too: [`ingest_merges_shared_contacts`](backend/tests
 | Bounded variable-length traversal | [`queries.rs:51`](backend/src/db/queries.rs) | `[*1..3]` neighbourhood that decides which detectors run (depth clamped and inlined, FalkorDB#3350) |
 | `GRAPH.RO_QUERY` + timeout | [`repository.rs:171-190`](backend/src/db/repository.rs) · test `algorithm_queries_obey_the_read_timeout` | All evidence queries are read-only with a 5 s server-side timeout. With a 1 ms timeout on a 22k-node graph the WCC, pageRank and labelPropagation queries fail with the server's timeout error (SPpaths, capped at 6 hops, finishes in about 2 ms), but FalkorDB checks the deadline between operations: one `algo.*` call runs to the end first (label propagation errs after 73 ms of an 80 ms run), so the HTTP scan cap and cooldown are what bound the work |
 | ACL user for reads | [`repository.rs:98-161`](backend/src/db/repository.rs) · test `reader_user_is_denied_writes_and_delete` | Evidence queries log in as a user limited to `GRAPH.RO_QUERY`; writes and `GRAPH.DELETE` from it get `NOPERM` |
-| Indexes + `GRAPH.EXPLAIN` | [`queries.rs:6`](backend/src/db/queries.rs) | 13 indexes plus 3 unique constraints that make concurrent writes safe; three of four detectors open with an index seek (plans above) |
+| Indexes + `GRAPH.EXPLAIN` | [`queries.rs:6`](backend/src/db/queries.rs) | 13 indexes plus 4 unique constraints that make concurrent writes safe; three of four detectors open with an index seek (plans above) |
 | Write-back | [`queries.rs:123-165, 204`](backend/src/db/queries.rs) | Claim status, `Investigation` node, `MERGE`d `ASSIGNED_INVESTIGATOR` edge |
 | Named graphs | [`tests/common/mod.rs`](backend/tests/common/mod.rs) | Each test run gets its own graph; the scale graph is named by its data hash (`scale_e03eb6b9`) |
 | `algo.WCC`, `algo.pageRank` | [`graph_algorithms.rs:60,83`](backend/tests/graph_algorithms.rs) · [`queries.rs:224`](backend/src/db/queries.rs) | Test-time cross-checks on the demo graph. WCC is also live through the `ring_components` tool (read-only, 5 s timeout), which returns every claim in the target's component. The rule planner calls it once after a detector match and spreads its corroboration runs (one per matched detector, as before) across ring members the evidence names; scoring still reads only the target claim's detectors, and live shop centrality is a degree count ([`queries.rs:99`](backend/src/db/queries.rs)) |
@@ -494,7 +498,7 @@ Graph algorithms used live: `algo.WCC` (`ring_components`, which also picks the 
 
 ![Diktiax architecture: Vercel dashboard, Render container with the Rust agent and FalkorDB, Groq planner, Claude over MCP](https://github.com/user-attachments/assets/1ff17889-0d11-41e4-a3f9-9fcf21e3c726)
 
-The agent, the HTTP API and the MCP server all use the same tool catalog, so Claude calls the same graph tools the agent calls, plus six that only outside agents get: `investigate_claim`, `investigation_history`, `evidence_reuse`, `connection_path`, `shop_influence` and `ring_communities`. In production FalkorDB and the backend share one Render container, with FalkorDB bound to loopback; locally they run as two Docker services.
+The agent, the HTTP API and the MCP server all use the same tool catalog, so Claude calls the same graph tools the agent calls, plus seven that only outside agents get: `investigate_claim`, `investigation_history`, `evidence_reuse`, `connection_path`, `shop_influence`, `ring_communities` and, on the stdio MCP server only, `review_claim`. In production FalkorDB and the backend share one Render container, with FalkorDB bound to loopback; locally they run as two Docker services.
 
 - **Backend:** Rust 1.99 (Axum 0.8, Tokio 1.53, `falkordb` crate 0.10, reqwest 0.13 with rustls). FalkorDB v4.22.1 is the only database.
 - **Frontend:** Next.js 16.4 / React 19.3, TypeScript 6, Tailwind CSS 4, Bun. Agent trace timeline, live graph canvas, claim intake form.

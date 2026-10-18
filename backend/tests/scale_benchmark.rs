@@ -239,7 +239,11 @@ fn write_key(out: &str, key_json: &str, key_hash: &str) {
 #[test]
 #[ignore = "pre-registration step; needs SCALE_SEED"]
 fn prereg_key() {
-    let seed = prereg_seed().expect("set SCALE_SEED");
+    // Without SCALE_SEED this step has nothing to pre-register, so `cargo test -- --ignored` skips it.
+    let Some(seed) = prereg_seed() else {
+        eprintln!("prereg_key skipped: set SCALE_SEED to pre-register a new answer key");
+        return;
+    };
     assert_ne!(seed, DEFAULT_SEED, "pre-register a new seed");
     std::fs::create_dir_all(PREREG_OUT).expect("output dir");
     let (key_json, key_hash) = answer_key(&generate(seed), Some(seed));
