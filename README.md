@@ -12,13 +12,13 @@ Track 01, Agents That Act on Connected Data, and Track 02, Agent Memory and Coor
 
 - **Live demo:** https://diktiax.vercel.app
 - **API:** https://diktiax.onrender.com
-- **Video (4K):** https://youtu.be/DLu3_uuH42A
+- **Video (4K):** https://youtu.be/yCOJfqVZIqE
 
-https://github.com/user-attachments/assets/8bf9e6ba-1c15-4737-89f5-df575e0ed24d
+https://github.com/user-attachments/assets/079f328e-0cac-4ebc-88b5-875b965519fd
 
 > **Judges, the 60-second path**
 > 1. Open https://diktiax.vercel.app (it can take up to a minute to wake). Click **CLM-48291**, the ring claim; CLM-20988, CLM-10022 and CLM-20417 are clean controls. One investigation per visitor every 15 s.
-> 2. Video: [0:10](https://youtu.be/DLu3_uuH42A?t=10) the ring · [1:30](https://youtu.be/DLu3_uuH42A?t=90) the agent investigates · [1:45](https://youtu.be/DLu3_uuH42A?t=105) WCC picks the corroboration targets · [2:32](https://youtu.be/DLu3_uuH42A?t=152) 5,040 claims · [3:27](https://youtu.be/DLu3_uuH42A?t=207) the agent reads its past verdicts.
+> 2. Video: [0:10](https://youtu.be/yCOJfqVZIqE?t=10) the ring · [1:30](https://youtu.be/yCOJfqVZIqE?t=90) the agent investigates · [1:45](https://youtu.be/yCOJfqVZIqE?t=105) WCC picks the corroboration targets · [2:32](https://youtu.be/yCOJfqVZIqE?t=152) 5,040 claims · [3:27](https://youtu.be/yCOJfqVZIqE?t=207) the agent reads its past verdicts · [3:51](https://youtu.be/yCOJfqVZIqE?t=231) a person confirms the fraud.
 > 3. Headline: on 5,040 generated claims the graph agent froze 200 of 240 fraud claims and 0 honest ones (precision 1.00, recall 0.83, F1 0.91); per-claim rules flagged 2,789 honest drivers (0.04, 0.50, 0.08). The other 40 fraud claims and 169 honest ones went to audit. 17 ms median per investigation. A pre-registered re-run on a fresh seed gave the same picture: rules flagged 2,753 honest drivers, the graph froze 200 of 240 and 0 honest.
 > 4. No browser? `curl -s https://diktiax.onrender.com/api/health` (expect `"falkordb":"ok"`; it also wakes the service), `curl -s -X POST https://diktiax.onrender.com/api/investigate/CLM-48291`, then `curl -s https://diktiax.onrender.com/api/claims/CLM-48291/investigations` to see the stored verdict. Investigate again after 15 s and the dossier's `memory` block shows the earlier verdict and the checks it skipped.
 > 5. Every number, with its test, command and commit: [`CLAIMS.md`](CLAIMS.md). Proof: `cargo test --release --test scale_benchmark -- --ignored --nocapture` and `cargo test --release --test agent_memory -- --ignored --test-threads=1` in `backend/`. The hosted graph reseeds on every restart, so its investigation history starts empty.
