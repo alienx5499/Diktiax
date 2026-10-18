@@ -39,19 +39,13 @@ impl RuleBasedPlanner {
     pub fn skipped(&self) -> &[PlannedCall] {
         &self.skipped
     }
-}
 
-impl Planner for RuleBasedPlanner {
-    async fn plan(
-        &mut self,
-        claim_id: &str,
-        history: &[ToolOutcome],
-    ) -> Result<Vec<PlannedCall>, String> {
-        let (skip, keep): (Vec<_>, Vec<_>) =
-            next_calls(claim_id, history).into_iter().partition(|c| {
-                c.claim_arg()
-                    .is_some_and(|id| id != claim_id && self.remembered.iter().any(|r| r == id))
-            });
+    /// Drops calls on remembered linked claims (any planner's calls), recording each once.
+    pub fn skip_remembered(&mut self, claim_id: &str, calls: Vec<PlannedCall>) -> Vec<PlannedCall> {
+        let (skip, keep): (Vec<_>, Vec<_>) = calls.into_iter().partition(|c| {
+            c.claim_arg()
+                .is_some_and(|id| id != claim_id && self.remembered.iter().any(|r| r == id))
+        });
         for call in skip {
             let seen = self
                 .skipped
@@ -61,7 +55,17 @@ impl Planner for RuleBasedPlanner {
                 self.skipped.push(call);
             }
         }
-        Ok(keep)
+        keep
+    }
+}
+
+impl Planner for RuleBasedPlanner {
+    async fn plan(
+        &mut self,
+        claim_id: &str,
+        history: &[ToolOutcome],
+    ) -> Result<Vec<PlannedCall>, String> {
+        Ok(self.skip_remembered(claim_id, next_calls(claim_id, history)))
     }
 }
 

@@ -4,7 +4,7 @@
 //! steps are kept.
 
 use super::planner::{PlannedCall, Planner, ToolOutcome};
-use super::rule_planner::next_calls;
+use super::rule_planner::RuleBasedPlanner;
 use tracing::warn;
 
 /// (public failure reason, history length when the planner failed)
@@ -17,6 +17,8 @@ pub struct FallbackPlanner<P> {
     handover: Option<Failure>,
     /// Set when the rule-based planner took over.
     failure: Option<Failure>,
+    /// Rule-based fallback; also applies the memory filter to every planner's calls.
+    rule: RuleBasedPlanner,
 }
 
 impl<P> FallbackPlanner<P> {
@@ -26,7 +28,18 @@ impl<P> FallbackPlanner<P> {
             backup,
             handover: None,
             failure: None,
+            rule: RuleBasedPlanner::default(),
         }
+    }
+
+    /// Skip corroboration on linked claims the latest prior verdict relied on, whoever plans.
+    pub fn remembering(mut self, remembered: Vec<String>) -> Self {
+        self.rule = RuleBasedPlanner::remembering(remembered);
+        self
+    }
+
+    pub fn skipped(&self) -> &[PlannedCall] {
+        self.rule.skipped()
     }
 
     /// `primary` when it never failed, `<primary> (backup provider after: <reason>)` while the
@@ -87,9 +100,9 @@ impl<P: Planner + Send> Planner for FallbackPlanner<P> {
                     for call in &mut calls {
                         call.rationale = format!("[backup provider] {}", call.rationale);
                     }
-                    return Ok(calls);
+                    return Ok(self.rule.skip_remembered(claim_id, calls));
                 }
-                Ok(calls) => return Ok(calls),
+                Ok(calls) => return Ok(self.rule.skip_remembered(claim_id, calls)),
                 Err(e) if on_backup || self.backup.is_none() => {
                     warn!("LLM planner failed, falling back to rule-based: {e}");
                     self.failure = Some((public_reason(&e), history.len()));
@@ -100,7 +113,7 @@ impl<P: Planner + Send> Planner for FallbackPlanner<P> {
                 }
             }
         }
-        let mut calls = next_calls(claim_id, history);
+        let mut calls = self.rule.plan(claim_id, history).await?;
         for call in &mut calls {
             call.rationale = format!("[rule-based fallback] {}", call.rationale);
         }
@@ -215,6 +228,37 @@ mod tests {
                 )]),
             }
         }
+    }
+
+    /// Planner that asks for one detector on a linked claim and one on the target.
+    struct Corroborating;
+
+    impl Planner for Corroborating {
+        async fn plan(&mut self, c: &str, _: &[ToolOutcome]) -> Result<Vec<PlannedCall>, String> {
+            Ok(vec![
+                PlannedCall::new(
+                    "detect_ghost_collision",
+                    json!({ "claim_id": "L1" }),
+                    "LLM".into(),
+                ),
+                PlannedCall::new(
+                    "detect_ghost_collision",
+                    json!({ "claim_id": c }),
+                    "LLM".into(),
+                ),
+            ])
+        }
+    }
+
+    #[tokio::test]
+    async fn llm_calls_on_remembered_linked_claims_are_skipped() {
+        let mut p = FallbackPlanner::new(Corroborating, None).remembering(vec!["L1".into()]);
+        let calls = p.plan("C1", &[]).await.expect("plans");
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].claim_arg(), Some("C1"));
+        p.plan("C1", &[]).await.expect("plans");
+        assert_eq!(p.skipped().len(), 1, "a repeat skip is recorded once");
+        assert_eq!(p.skipped()[0].claim_arg(), Some("L1"));
     }
 
     const GROQ_429: &str = r#"LLM API returned HTTP 429: {"error":{"message":"Rate limit reached in organization org_abc123"}} key [redacted]"#;

@@ -78,23 +78,41 @@ impl ClaimInvestigator {
 
         let mut outcomes: Vec<ToolOutcome> = Vec::new();
         let mut skipped = Vec::new();
+        let remembered = prior
+            .as_ref()
+            .map(|p| p.relied_on.clone())
+            .unwrap_or_default();
         let (planner_label, narrative, fallback_note) = match &self.planner {
             PlannerConfig::RuleBased => {
-                let remembered = prior.as_ref().map(|p| p.relied_on.clone());
-                let mut planner = RuleBasedPlanner::remembering(remembered.unwrap_or_default());
+                let mut planner = RuleBasedPlanner::remembering(remembered);
                 let narrative = self.run(&mut planner, claim_id, &mut outcomes).await?;
                 skipped = planner.skipped().to_vec();
                 (self.planner.label(), narrative, None)
             }
             PlannerConfig::Claude(cfg) => {
                 let primary = ClaudePlanner::new(cfg.clone());
-                self.run_llm(primary, None, claim_id, &mut outcomes).await?
+                self.run_llm(
+                    primary,
+                    None,
+                    remembered,
+                    claim_id,
+                    &mut outcomes,
+                    &mut skipped,
+                )
+                .await?
             }
             PlannerConfig::OpenAi(cfg) => {
                 let primary = OpenAiPlanner::new(cfg.clone());
                 let backup = cfg.backup.as_deref().cloned().map(OpenAiPlanner::new);
-                self.run_llm(primary, backup, claim_id, &mut outcomes)
-                    .await?
+                self.run_llm(
+                    primary,
+                    backup,
+                    remembered,
+                    claim_id,
+                    &mut outcomes,
+                    &mut skipped,
+                )
+                .await?
             }
         };
 
@@ -176,11 +194,14 @@ impl ClaimInvestigator {
         &self,
         primary: P,
         backup: Option<P>,
+        remembered: Vec<String>,
         claim_id: &str,
         outcomes: &mut Vec<ToolOutcome>,
+        skipped: &mut Vec<PlannedCall>,
     ) -> Result<(String, Option<String>, Option<String>), String> {
-        let mut planner = FallbackPlanner::new(primary, backup);
+        let mut planner = FallbackPlanner::new(primary, backup).remembering(remembered);
         let narrative = self.run(&mut planner, claim_id, outcomes).await?;
+        *skipped = planner.skipped().to_vec();
         self.coverage_guard(claim_id, outcomes).await;
         let primary = self.planner.label();
         Ok((
