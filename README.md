@@ -175,9 +175,9 @@ The score never reads this history: on a re-run a past verdict can save corrobor
 
 Source of truth: [`data/seed.cypher`](data/seed.cypher) (68 nodes, 84 relationships) and the ingest/write-back queries in [`backend/src/db/queries.rs`](backend/src/db/queries.rs).
 
-![Diktiax graph model](https://github.com/user-attachments/assets/08832df0-c319-43d4-9fe0-6636edb16c99)
+![Diktiax graph model: customers, contacts, vehicles, accidents and providers around each claim, plus the investigations, reviews and investigator assignments written by the agent and the reviewer](https://github.com/user-attachments/assets/d198027b-ba88-47ae-8d46-e0ad1f6061ab)
 
-Dashed relationships are written by the agent.
+Dashed relationships are written by the agent or the reviewer.
 
 | Label | Key properties | Why it's a node |
 |-------|----------------|-----------------|
