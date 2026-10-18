@@ -4,7 +4,7 @@
 
 ![Three crashes, one ring: the graph picks the next query](https://github.com/user-attachments/assets/f6b18adb-0742-46d3-ad0c-3e1b30dca7ef)
 
-**An investigation agent that finds insurance fraud rings by walking a FalkorDB graph, then acts on what it finds.**
+**An investigation agent that finds insurance fraud rings by walking a FalkorDB graph, acts on what it finds, and remembers it: every verdict joins a constraint-guarded chain in the graph that the agent, and any other agent over MCP, reads before investigating again.**
 
 Track 01, Agents That Act on Connected Data, and Track 02, Agent Memory and Coordination: FalkorDB "Graph Hacks: Context for AI Agents".
 
@@ -12,15 +12,16 @@ Track 01, Agents That Act on Connected Data, and Track 02, Agent Memory and Coor
 
 - **Live demo:** https://diktiax.vercel.app
 - **API:** https://diktiax.onrender.com
-- **Video (4K):** https://youtu.be/LZfy5o2mVDY
+- **Video (4K):** https://youtu.be/DLu3_uuH42A
 
-https://github.com/user-attachments/assets/d0a85e78-28cc-4b8d-aef5-4c8555119ce0
+https://github.com/user-attachments/assets/8bf9e6ba-1c15-4737-89f5-df575e0ed24d
 
 > **Judges, the 60-second path**
 > 1. Open https://diktiax.vercel.app (it can take up to a minute to wake). Click **CLM-48291**, the ring claim; CLM-20988, CLM-10022 and CLM-20417 are clean controls. One investigation per visitor every 15 s.
-> 2. Video: [0:10](https://youtu.be/LZfy5o2mVDY?t=10) the ring · [1:29](https://youtu.be/LZfy5o2mVDY?t=89) the agent investigates · [2:22](https://youtu.be/LZfy5o2mVDY?t=142) 5,040 claims · [3:16](https://youtu.be/LZfy5o2mVDY?t=196) memory and coordination.
+> 2. Video: [0:10](https://youtu.be/DLu3_uuH42A?t=10) the ring · [1:30](https://youtu.be/DLu3_uuH42A?t=90) the agent investigates · [1:45](https://youtu.be/DLu3_uuH42A?t=105) WCC picks the corroboration targets · [2:32](https://youtu.be/DLu3_uuH42A?t=152) 5,040 claims · [3:27](https://youtu.be/DLu3_uuH42A?t=207) the agent reads its past verdicts.
 > 3. Headline: on 5,040 generated claims the graph agent froze 200 of 240 fraud claims and 0 honest ones (precision 1.00, recall 0.83, F1 0.91); per-claim rules flagged 2,789 honest drivers (0.04, 0.50, 0.08). The other 40 fraud claims and 169 honest ones went to audit. 17 ms median per investigation. A pre-registered re-run on a fresh seed gave the same picture: rules flagged 2,753 honest drivers, the graph froze 200 of 240 and 0 honest.
-> 4. Proof: `cargo test --release --test scale_benchmark -- --ignored --nocapture` and `cargo test --release --test agent_memory -- --ignored --test-threads=1` in `backend/`. The hosted graph reseeds on every restart, so its investigation history starts empty.
+> 4. No browser? `curl -s https://diktiax.onrender.com/api/health` (expect `"falkordb":"ok"`; it also wakes the service), `curl -s -X POST https://diktiax.onrender.com/api/investigate/CLM-48291`, then `curl -s https://diktiax.onrender.com/api/claims/CLM-48291/investigations` to see the stored verdict. Investigate again after 15 s and the dossier's `memory` block shows the earlier verdict and the checks it skipped.
+> 5. Proof: `cargo test --release --test scale_benchmark -- --ignored --nocapture` and `cargo test --release --test agent_memory -- --ignored --test-threads=1` in `backend/`. The hosted graph reseeds on every restart, so its investigation history starts empty.
 
 ## The problem
 
@@ -47,9 +48,9 @@ Give it a claim id. The agent:
 
 Every step is returned as a trace: tool, arguments, why it was chosen, what came back, and how long it took.
 
-![Agent trace in the dashboard: each step with the planner's reason, arguments, result and Cypher](https://github.com/user-attachments/assets/b21dc007-fab2-49db-8205-0ff3e7397cf5)
+![Agent trace in the dashboard: each step with the planner's reason, arguments, result and Cypher](https://github.com/user-attachments/assets/8d74d5bc-75e7-48bb-9f78-e77f72a5b6dc)
 
-![The evidence path highlighted on the claim's subgraph](https://github.com/user-attachments/assets/6603f8b3-37ee-44ea-b292-46616146b59a)
+![The evidence path highlighted on the claim's subgraph](https://github.com/user-attachments/assets/2aa91a63-9b03-424a-bb91-0d752b952550)
 
 ## How the graph drives the agent
 
@@ -77,11 +78,21 @@ The planner explores, runs two detectors, and stops. It never calls `detect_shar
 
 ![Verdicts stay under the claim in the graph, so a new session or another agent over MCP reads the same certificate](https://github.com/user-attachments/assets/7518057e-6acc-4ec1-a181-8c226bb5c401)
 
-**Thesis: the graph is the shared memory.** The agent writes every verdict and assignment into FalkorDB, and the next session, the SIU team's workload and any other agent over MCP all read the same state, so work is never redone and never assigned twice.
+![Re-investigating CLM-48291: the verdict comes first, and the memory panel shows the agent agrees with its earlier verdict and skipped 2 corroboration checks it already had evidence for](https://github.com/user-attachments/assets/9e6b947a-100c-4497-933c-ce9bbaf74525)
+
+**The coordination problem: two agents, or two runs of one agent, must never assign the same claim twice, fork its verdict history, or redo work already decided.** Diktiax makes the graph the shared memory that guarantees this. The agent writes every verdict and assignment into FalkorDB; the next run, the SIU team's workload and any other agent over MCP all read the same state; and the guarantees are database constraints, not app locks. Each one has a test that passes:
+
+| Guarantee | Test |
+|---|---|
+| 32 racing assignments of one claim leave exactly one investigator edge | [`concurrent_direct_assignment_creates_one_edge`](backend/tests/agent_memory.rs) |
+| 16 concurrent investigations of one claim leave one linear `SUPERSEDES` chain (16 nodes, 15 links, one head) | [`concurrent_investigations_form_one_supersedes_chain`](backend/tests/agent_memory.rs) |
+| 8 concurrent MCP `investigate_claim` calls on a new claim run the agent once; 7 get the stored verdict | [`concurrent_mcp_investigate_claim_runs_the_agent_once`](backend/tests/agent_memory.rs) |
+| A re-run reads the last verdict, says whether it agrees, and skips corroboration it already relied on | [`second_run_remembers_and_skips_corroborated_work`](backend/tests/agent_memory.rs) |
+| 8 concurrent re-runs each report memory consistent with the chain they read | [`concurrent_reinvestigations_report_consistent_memory`](backend/tests/agent_memory.rs) |
 
 - **Verdicts outlive the session.** Every investigation writes an `Investigation` node (certificate id, decision, risk score, time) under the claim, and re-investigating adds another one, so the graph holds the full history. `GET /api/claims/{id}/investigations` and the MCP tool `investigation_history` return it newest first. [`verdicts_survive_across_sessions`](backend/tests/agent_memory.rs) investigates a claim, drops the client, connects a new one and checks the same certificate comes back, then investigates again and gets two entries.
 - **Other agents pick up where Diktiax left off.** `investigation_history` is served over MCP and HTTP, so Claude or any MCP client can see what the agent already decided instead of re-running it. The agent's own planners never see this tool (a unit test checks it), so a past verdict can't stand in for fresh evidence.
-- **Memory is consumed, not just stored.** `investigate_claim` over MCP reads the claim's history first. If a verdict is already recorded it returns that verdict (`reused: true`, certificate id, decision, risk score, time) without running the agent or writing anything; `force: true` runs a fresh investigation. A per-claim lock covers the check, the run and the write, so 8 concurrent calls on a never-investigated claim run the agent once and the other 7 get the reused verdict, while calls on different claims still run in parallel ([`concurrent_mcp_investigate_claim_runs_the_agent_once`](backend/tests/agent_memory.rs)). HTTP `POST /api/investigate`, which the dashboard uses, always runs a fresh investigation, but the agent still reads its memory first: one `PRIOR_VERDICTS` read returns the verdict count, the latest verdict and the claims it `RELIED_ON`. The dossier gains a `memory` block (`prior_investigations`, `latest_prior`, `agrees_with_latest`, `skipped_corroboration`, `tool_calls_saved`), the rationale says whether this run agrees, and corroboration on claims the last verdict already relied on is skipped, whichever planner (rule-based or LLM) asked for it (rule-based on the ring claim: 9 tool calls first, 7 on a re-run; same score). Scoring never reads a past verdict. Tests: [`second_run_remembers_and_skips_corroborated_work`](backend/tests/agent_memory.rs), [`concurrent_reinvestigations_report_consistent_memory`](backend/tests/agent_memory.rs).
+- **Memory is consumed, not just stored.** `investigate_claim` over MCP reads the claim's history first. If a verdict is already recorded it returns that verdict (`reused: true`, certificate id, decision, risk score, time) without running the agent or writing anything; `force: true` runs a fresh investigation. A per-claim lock covers the check, the run and the write, so 8 concurrent calls on a never-investigated claim run the agent once and the other 7 get the reused verdict, while calls on different claims still run in parallel ([`concurrent_mcp_investigate_claim_runs_the_agent_once`](backend/tests/agent_memory.rs)). That lock lives in one process (the hosted backend runs a single instance); with several instances two of them could both run the agent, and the verdict chain would still stay linear, because that part is a database constraint. HTTP `POST /api/investigate`, which the dashboard uses, always runs a fresh investigation, but the agent still reads its memory first: one `PRIOR_VERDICTS` read returns the verdict count, the latest verdict and the claims it `RELIED_ON`. The dossier gains a `memory` block (`prior_investigations`, `latest_prior`, `agrees_with_latest`, `skipped_corroboration`, `tool_calls_saved`), the rationale says whether this run agrees, and corroboration on claims the last verdict already relied on is skipped, whichever planner (rule-based or LLM) asked for it (rule-based on the ring claim: 9 tool calls first, 7 on a re-run; same score). Scoring never reads a past verdict. Tests: [`second_run_remembers_and_skips_corroborated_work`](backend/tests/agent_memory.rs), [`concurrent_reinvestigations_report_consistent_memory`](backend/tests/agent_memory.rs).
 - **Memory has structure.** Each new verdict on a claim `SUPERSEDES` the previous one, so a claim's history is a single linear chain, and it links with `RELIED_ON` to the linked claims its evidence came from. Two unique constraints (`SUPERSEDES.superseded_id` and one `InvestigationChain` start marker per claim) keep the chain linear under concurrency; [`concurrent_investigations_form_one_supersedes_chain`](backend/tests/agent_memory.rs) runs 16 investigations of one claim at once and checks 16 nodes, 15 links and one head, and [`chain_constraints_reject_a_fork`](backend/tests/agent_memory.rs) forces the exact write a lost race would make and checks it is rejected with nothing left behind.
 - **Shared state with the SIU team.** Assigning an investigator raises their `open_cases` in the graph, and the next case goes to the investigator whose specialties best cover the matched patterns, least loaded first, so earlier investigations shape later assignments. A claim keeps its first investigator: re-investigating it reuses the existing assignment instead of picking again, so `open_cases` only rises once.
 - **Consistent under concurrency.** [`concurrent_investigations_keep_shared_state_consistent`](backend/tests/agent_memory.rs) runs 16 investigations at once (all 8 claims twice) and checks there are exactly 16 verdicts, exactly one investigator on each of the 5 flagged claims, none on the 3 clean ones, and an `open_cases` increase of exactly 5. Writing it caught a real race (two concurrent runs could assign a claim twice). FalkorDB does not document that a single read-then-write statement is serialised under concurrency, so the fix is a database constraint: one `MERGE` statement plus a unique constraint on `ASSIGNED_INVESTIGATOR.claim_id`, created at seed time and awaited until it is enforced. [`concurrent_direct_assignment_creates_one_edge`](backend/tests/agent_memory.rs) and [`concurrent_investigations_of_one_claim_assign_once`](backend/tests/agent_memory.rs) run 32 concurrent writers on one claim and always leave exactly one edge. [`without_the_constraint_concurrent_assignment_race_is_observed`](backend/tests/agent_memory.rs) drops the constraint and races the statement alone: on FalkorDB v4.22.1 it left one edge in all 60 rounds we ran (1,920 calls), so we could not reproduce a duplicate with the current single `MERGE` statement; the constraint is kept as the guarantee.
@@ -100,7 +111,7 @@ A real MCP session (JSON-RPC over stdio against the `--mcp-server` binary, recor
 ← {"claim_id":"CLM-48291","claims":["CLM-39102","CLM-44730","CLM-48291"],"size":3}
 ```
 
-By design the agent's own planner never reads this history: a past verdict is context for a person or another agent, not evidence for a new score.
+The score never reads this history: on a re-run a past verdict can save corroboration work and is reported in the dossier's `memory` block, but it is never evidence for a new score.
 
 ## Graph data model
 
@@ -306,7 +317,7 @@ cd backend && cargo test --test baseline -- --ignored --nocapture
 
 The graph agent froze 200 of 240 fraud claims and no honest ones; loose rings are a blind spot for freezing and go to audit instead, along with 3.5% of honest claims. An LLM reading a stratified 50-claim sample one claim at a time caught 3 of 24 fraud claims. Each investigation took 17 ms median (p95 23 ms) at this size. The evasive rings are generated with a police report and an amount between $3,000 and $12,000 ([`scale_benchmark.rs`](backend/tests/scale_benchmark.rs)), exactly the claims the per-claim rules can't flag, so the rules' 0 of 80 there is by construction: that group exists to show what a ring looks like once it learns the rules. The data is generated, so this measures the mechanism on rings built the way the detectors expect, not real-world accuracy. The answer key comes from the same seeded generator and is hashed before any claim is investigated: the hash shows the key wasn't edited after scoring, not that the generator wasn't tuned between runs.
 
-**Pre-registered re-run.** The original answer key holds claim ids and labels only, so its hash is the same for any seed and proves little on its own. So the benchmark was run again on a fresh seed (20261019) as a pre-registration: the answer key, now bound to a SHA-256 of the whole generated dataset, was committed on its own before the results existed, and the results went into a later commit; `git log -- scripts/scale/prereg/` shows the order. Same outcome: rules 120 of 240 fraud and 2,753 honest flagged; graph 200 of 240 frozen and 0 honest (178 honest to audit). Reproduce with `SCALE_SEED=20_261_019 cargo test --release --test scale_benchmark scale_benchmark -- --ignored --exact`; it fails if the key's hash differs from the committed one ([`scripts/scale/prereg/`](scripts/scale/prereg/)).
+**Pre-registered re-run.** The original answer key holds claim ids and labels only, so its hash is the same for any seed and proves little on its own. So the benchmark was run again on a fresh seed (20261019) as a pre-registration: the answer key, now bound to a SHA-256 of the whole generated dataset, was committed on its own before the results existed, and the results went into a later commit: key `9826efe` at 02:53 IST on 18 Oct, results `2cf0baa` at 03:13 IST; `git log -- scripts/scale/prereg/` shows the order. Same outcome: rules 120 of 240 fraud and 2,753 honest flagged; graph 200 of 240 frozen and 0 honest (178 honest to audit). Reproduce with `SCALE_SEED=20_261_019 cargo test --release --test scale_benchmark scale_benchmark -- --ignored --exact`; it fails if the key's hash differs from the committed one ([`scripts/scale/prereg/`](scripts/scale/prereg/)).
 
 Reproduce it (about 90 s; needs FalkorDB on `localhost:6379`, uses its own graph):
 
