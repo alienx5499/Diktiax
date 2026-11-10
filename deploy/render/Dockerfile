@@ -13,8 +13,7 @@ COPY data /app/data
 RUN touch src/lib.rs src/main.rs && cargo build --release
 
 FROM falkordb/falkordb:v4.22.1
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
+COPY --from=builder /etc/ssl/certs /etc/ssl/certs
 COPY --from=builder /app/backend/target/release/diktiax-backend /usr/local/bin/diktiax-backend
 COPY deploy/render/start.sh /usr/local/bin/start.sh
 RUN chmod +x /usr/local/bin/start.sh
